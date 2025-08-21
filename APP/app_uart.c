@@ -36,7 +36,7 @@ int socket_send_to_middle(int sock_fd, char *buf, int buf_len) {
 	return 0;
 }
 
-int init_usart(UART_Config_Params *uart_instance, int client_socket, char *buf,
+int init_usart(ChannelState *uart_instance, int client_socket, char *buf,
 		int buf_len, int channel) {
 	int ret;
 
@@ -50,22 +50,22 @@ int init_usart(UART_Config_Params *uart_instance, int client_socket, char *buf,
 
 	/*设置串口波特率*/
 	int baud_rate = bauderate_table[(int) buf[2]];
-	uart_instance->config.baud_rate = baud_rate;
-	LOG_DEBUG("baud_rate: %d\n", uart_instance->config.baud_rate);
+	uart_instance->baudrate = baud_rate;
+	LOG_DEBUG("baud_rate: %d\n", uart_instance->baudrate);
 
 	/*data bit*/
 	data_bit = ((int) buf[3]) & 0x03;
-	uart_instance->config.data_bit = data_bit_table[data_bit];
-	LOG_DEBUG("data_bit: %d\n", uart_instance->config.data_bit);
+	uart_instance->data_bits = data_bit_table[data_bit];
+	LOG_DEBUG("data_bit: %d\n", uart_instance->data_bits);
 
 	/*stop bit*/
 	stop_bit = ((int) buf[3]) & 0x04;
 	if (stop_bit == 0) {
-		uart_instance->config.stop_bit = USART_STOP_BIT_1;
-		LOG_DEBUG("stop_bit: %d\n", uart_instance->config.stop_bit);
+		uart_instance->stop_bits = USART_STOP_BIT_1;
+		LOG_DEBUG("stop_bit: %d\n", uart_instance->stop_bits);
 	} else {
-		uart_instance->config.stop_bit = USART_STOP_BIT_2;
-		LOG_DEBUG("stop_bit: %d\n", uart_instance->config.stop_bit);
+		uart_instance->stop_bits = USART_STOP_BIT_2;
+		LOG_DEBUG("stop_bit: %d\n", uart_instance->stop_bits);
 	}
 
 	/* 0b111000，用于提取第3 - 5位*/
@@ -73,23 +73,23 @@ int init_usart(UART_Config_Params *uart_instance, int client_socket, char *buf,
 	switch (last_mask) {
 	case 0x00:
 		LOG_DEBUG("Parity: None\n");
-		uart_instance->config.parity = USART_PARITY_NONE;
+		uart_instance->parity = USART_PARITY_NONE;
 		break;
 	case 0x08:
 		LOG_DEBUG("Parity: Even\n");
-		uart_instance->config.parity = USART_PARITY_EVEN;
+		uart_instance->parity = USART_PARITY_EVEN;
 		break;
 	case 0x10:
 		LOG_DEBUG("Parity: Odd\n");
-		uart_instance->config.parity = USART_PARITY_ODD;
+		uart_instance->parity = USART_PARITY_ODD;
 		break;
 	case 0x18:
 		LOG_DEBUG("Parity: Mark\n");
-		uart_instance->config.mark = USART_IOCTL_MARK;
+		uart_instance->mark = USART_IOCTL_MARK;
 		break;
 	case 0x20:
 		LOG_DEBUG("Parity: Space\n");
-		uart_instance->config.space = USART_IOCTL_SPACE;
+		uart_instance->space = USART_IOCTL_SPACE;
 		break;
 	default:
 		LOG_ERROR("Unknown parity configuration:%02x \n", last_mask);
@@ -98,36 +98,36 @@ int init_usart(UART_Config_Params *uart_instance, int client_socket, char *buf,
 	/*调用AXI_api设置串口相关寄存器*/
 	axi165502CInit(uart_instance, channel);
 
-	uart_instance->config.usart_mcr_dtr = (unsigned char) buf[4];
+	uart_instance->usart_mcr_dtr = (unsigned char) buf[4];
 
-	uart_instance->config.usart_mcr_rts = (unsigned char) buf[5];
+	uart_instance->usart_mcr_rts = (unsigned char) buf[5];
 
 	/* 获取当前 MCR 寄存器值*/
 	unsigned int mcr_reg = userAxiCfgRead(channel, AXI_16550_MCR);
 
 	/*设置 DTR 位*/
-	if (uart_instance->config.usart_mcr_dtr) {
+	if (uart_instance->usart_mcr_dtr) {
 		mcr_reg |= MCR_DTR;
 	} else {
 		mcr_reg &= ~MCR_DTR;
 	}
 
 	/* 设置 RTS 位*/
-	if (uart_instance->config.usart_mcr_rts) {
+	if (uart_instance->usart_mcr_rts) {
 		mcr_reg |= MCR_RTS;
 	} else {
 		mcr_reg &= ~MCR_RTS;
 	}
 	/* 写入更新后的 MCR 寄存器值*/
 	//	userAxiCfgWrite(channel, AXI_16550_MCR, mcr_reg);
-	uart_instance->config.usart_crtscts = (unsigned char) buf[6];
+	uart_instance->usart_crtscts = (unsigned char) buf[6];
 
 	/*
-	 //	if(uart_instance->config.IX_on == (int)buf[7])
+	 //	if(uart_instance->IX_on == (int)buf[7])
 	 //	{
 	 //		send_xon_xoff_char(channel, 1);
 	 //	}
-	 //	if(uart_instance->config.IX_off == (int)buf[8])
+	 //	if(uart_instance->IX_off == (int)buf[8])
 	 //	{
 	 //		send_xon_xoff_char(channel, 0);
 	 //	}
@@ -150,20 +150,20 @@ int init_usart(UART_Config_Params *uart_instance, int client_socket, char *buf,
 
 }
 
-int usart_set_baudrate(UART_Config_Params *uart_instance, int client_socket,
+int usart_set_baudrate(ChannelState *uart_instance, int client_socket,
 		char *buf, int buf_len, int channel) {
 	int ret;
 	unsigned int baud_rate;
 
 	/*提取波特率:假设高位在前*/
 	baud_rate = buf[2] << 24 | buf[3] << 16 | buf[4] << 8 | buf[5];
-	uart_instance->config.baud_rate = baud_rate;
+	uart_instance->baudrate = baud_rate;
 
 	LOG_DEBUG("baud_rate: %d\n", baud_rate);
 
 	//调用AXI_api设置串口波特率
 	//打包数据
-	axi16550BaudInit(channel, uart_instance->config.baud_rate);
+	axi16550BaudInit(channel, uart_instance->baudrate);
 
 	char response[3] = { 0 };
 	response[0] = buf[0];
@@ -378,7 +378,7 @@ int usart_close(int client_socket, char *buf, int buf_len) {
 	return 0;
 }
 
-void handle_command(UART_Config_Params *uart_instance, int client_socket,
+void handle_command(ChannelState *uart_instance, int client_socket,
 		char *buf, int buf_len, int channel) {
 	/*解析数据*/
 	unsigned char cmd = buf[0];

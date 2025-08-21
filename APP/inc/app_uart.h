@@ -56,24 +56,19 @@
 
 /* Function prototypes */
 int socket_send_to_middle(int sock_fd, char *buf, int buf_len);
-int init_usart(UART_Config_Params *uart_instance, int client_socket, char *buf,
-		int buf_len, int channel);
-int usart_set_baudrate(UART_Config_Params *uart_instance, int client_socket,
-		char *buf, int buf_len, int channel);
+int init_usart(ChannelState *uart_instance, int client_socket, char *buf,int buf_len, int channel);
+int usart_set_baudrate(ChannelState *uart_instance, int client_socket,char *buf, int buf_len, int channel);
+void handle_command(ChannelState *uart_instance, int client_socket,char *buf, int buf_len, int channel);
+
 int usart_set_xon_xoff(int client_socket, int channel, char *buf, int buf_len);
 int usart_set_tx_fifo(int client_socket, int channel, char *buf, int buf_len);
-int usart_set_line_control(int client_socket, int channel, char *buf,
-		int buf_len);
+int usart_set_line_control(int client_socket, int channel, char *buf, int buf_len);
 int usart_set_xon(int client_socket, int channel, char *buf, int buf_len);
 int usart_set_xoff(int client_socket, int channel, char *buf, int buf_len);
-int usart_set_start_break(int client_socket, int channel, char *buf,
-		int buf_len);
-int usart_set_stop_break(int client_socket, int channel, char *buf,
-		int buf_len);
+int usart_set_start_break(int client_socket, int channel, char *buf, int buf_len);
+int usart_set_stop_break(int client_socket, int channel, char *buf, int buf_len);
 int usart_report_queue(int client_socket, char *buf, int buf_len);
 int usart_close(int client_socket, char *buf, int buf_len);
-void handle_command(UART_Config_Params *uart_instance, int client_socket,
-		char *buf, int buf_len, int channel);
 
 void uart_task(unsigned int channel);
 void send_xon_xoff_char(uint8_t channel, uint8_t is_xon);

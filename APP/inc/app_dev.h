@@ -59,12 +59,21 @@ typedef struct {
     char alias[MAX_ALIAS_LEN];
     /* -- 配置参数 -- */
     int baudrate;
-    int data_bits;
-    int stop_bits;
-    int parity;
-    int flow_ctrl;
-    int fifo_enable;
-    int interface_type;
+    unsigned char data_bits;
+    unsigned char stop_bits;
+    unsigned char parity;
+    unsigned char flow_ctrl;
+	unsigned char space;
+    unsigned char mark;
+	unsigned char usart_mcr_dtr;
+	unsigned char usart_mcr_rts;
+	unsigned char usart_crtscts;
+	unsigned char IX_on;
+	unsigned char IX_off; //XonXoff
+
+    unsigned char fifo_enable;
+    unsigned char interface_type;
+
 
     /* -- Operating Settings -- */
     unsigned char op_mode;

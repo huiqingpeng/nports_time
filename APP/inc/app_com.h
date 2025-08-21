@@ -73,47 +73,6 @@ typedef struct {
 } NewConnectionMsg;
 
 
-
-/* Main configuration structure */
-typedef struct
-{
-	usart_params1_t config;
-
-	int server_fdcmd;
-
-	/* sock */
-	int sock_cmd;
-	int sock_data;
-	uint16_t sock_cmd_port;
-	uint16_t sock_data_port;
-
-	/* client fd*/
-	int cmd_client_fd;
-	int data_client_fd;
-	uint64_t cmd_count;
-	uint64_t data_count;
-
-	/* cmd state */
-	uint8_t sock_cmd_state;
-	uint8_t sock_data_state;
-
-	/* buffer */
-	char tx_buffer[BUFFERCOM_SIZE_TX];
-	char rx_buffer[BUFFERCOM_SIZE_RX];
-	ring_buffer_t data_tx;
-	ring_buffer_t data_rx;
-
-	/* heartbeat */
-	unsigned int last_send_tick; 
-	BOOL is_active;           
-
-	/* tx chunk limit */
-	int tx_buffer_limit; 
-
-	uint64_t last_activity_time;
-	uint8_t pause_send; /* 加入待后续优化 */
-} UART_Config_Params;
-
 /* ------------------ Global Variable Declarations (extern) ------------------ */
 /*
  * 在.c文件中定义的全局变量，在此处用extern声明，以便其他文件可以访问。
