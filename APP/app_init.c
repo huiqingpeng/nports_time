@@ -29,8 +29,6 @@
 MSG_Q_ID g_config_conn_q;
 MSG_Q_ID g_data_conn_q;
 /* ------------------ Global Variable Definitions ------------------ */
-// 在此文件中定义全局变量的实体
-ChannelState g_channel_states[NUM_PORTS];
 SEM_ID g_config_mutex;
 TASK_ID g_conn_manager_tid;
 TASK_ID g_realtime_scheduler_tid;
@@ -40,7 +38,9 @@ TASK_ID g_config_task_manager_tid;
  * @details 在VxWorks启动脚本中，通常会调用这个函数来启动整个应用。
  */
 void app_start(void) {
+	int i,j;
 	log_init(LOG_LEVEL_INFO);
+
 	ifconfig("gem0 192.168.8.4");
 
 	LOG_INFO("\n\n--- Application Starting ---\n");
@@ -50,6 +50,7 @@ void app_start(void) {
 
 	// 创建消息队列
 	// 参数: maxMsgs, maxMsgLength, options
+	dev_config_init();
 	g_data_conn_q = msgQCreate(DATA_QUEUE_CAPACITY, sizeof(NewConnectionMsg),MSG_Q_FIFO);
 	g_config_conn_q = msgQCreate(DATA_QUEUE_CAPACITY,sizeof(NewConnectionMsg), MSG_Q_FIFO);
 
@@ -70,7 +71,6 @@ void app_start(void) {
 
 	/* ------------------ 2. 初始化通道状态 ------------------ */
 	LOG_INFO("Initializing channel states...\n");
-	int i,j;
 	for (i = 0; i < NUM_PORTS; i++) {
 		// 设置默认配置
 		g_channel_states[i].baudrate = 9600;
@@ -82,12 +82,9 @@ void app_start(void) {
 			g_channel_states[i].data_client_fds[j] = -1;	
 		}
 
-
 		// 初始化环形缓冲区
-		ring_buffer_init(&g_channel_states[i].buffer_net,
-				g_channel_states[i].net_buffer_mem, RING_BUFFER_SIZE);
-		ring_buffer_init(&g_channel_states[i].buffer_uart,
-				g_channel_states[i].uart_buffer_mem, RING_BUFFER_SIZE);
+		ring_buffer_init(&g_channel_states[i].buffer_net,  g_channel_states[i].net_buffer_mem,  RING_BUFFER_SIZE);
+		ring_buffer_init(&g_channel_states[i].buffer_uart, g_channel_states[i].uart_buffer_mem, RING_BUFFER_SIZE);
 	}
 	LOG_INFO("All %d channel states initialized.\n", NUM_PORTS);
 

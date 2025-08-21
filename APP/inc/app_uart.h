@@ -6,9 +6,9 @@
 #include "app_com.h"
 
 /* ASPP Command Definitions */
-#define     ASPP_CMD_PORT_INIT          (0x2c)  /*³õÊ¼»¯´®¿Ú*/
-#define     ASPP_CMD_NOTIFY             (0x26)  /*ÏòÖĞ¼ä¼şÍ¨ÖªÉè±¸×´Ì¬¸Ä±ä*/
-#define     ASPP_CMD_SETBAUD            (0x17)  /*ÉèÖÃ´®¿Ú²¨ÌØÂÊ*/
+#define     ASPP_CMD_PORT_INIT          (0x2c)  /*åˆå§‹åŒ–ä¸²å£*/
+#define     ASPP_CMD_NOTIFY             (0x26)  /*å‘ä¸­é—´ä»¶é€šçŸ¥è®¾å¤‡çŠ¶æ€æ”¹å˜*/
+#define     ASPP_CMD_SETBAUD            (0x17)  /*è®¾ç½®ä¸²å£æ³¢ç‰¹ç‡*/
 #define     ASPP_CMD_XONXOFF            (0x18)  /*XonXoff*/
 #define     ASPP_CMD_TX_FIFO            (0x30)  /*TX_FIFO*/
 #define     ASPP_CMD_LINECTRL           (0x12)  /*LINECTRL*/

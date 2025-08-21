@@ -51,13 +51,15 @@ void RealTimeSchedulerTask(void) {
 	// 1. 创建用于同步的二进制信号量
 	s_timer_sync_sem = semBCreate(SEM_Q_PRIORITY, SEM_EMPTY);
 	if (s_timer_sync_sem == NULL) {
-		LOG_ERROR("FATAL: RealTimeSchedulerTask failed to create sync semaphore.\n");
+		LOG_ERROR(
+				"FATAL: RealTimeSchedulerTask failed to create sync semaphore.\n");
 		return;
 	}
 
 	// 2. 设置并启动高精度硬件定时器
 	if (setup_high_precision_timer() != OK) {
-		LOG_ERROR("FATAL: RealTimeSchedulerTask failed to setup high-precision timer.\n");
+		LOG_ERROR(
+				"FATAL: RealTimeSchedulerTask failed to setup high-precision timer.\n");
 		return;
 	}
 	LOG_INFO("RealTimeSchedulerTask: High-precision timer initialized.\n");
@@ -126,16 +128,12 @@ static void check_for_new_connections(void) {
 				// 		"RT_Task: Ch %d accepted new client fd=%d. Total clients: %d\n",
 				// 		i, msg.client_fd, g_channel_states[i].num_data_clients);
 			} else {
-	LOG_ERROR(
-						"RT_Task: Ch %d client limit reached. Rejecting fd=%d\n",
-						i, msg.client_fd);
+				LOG_ERROR("RT_Task: Ch %d client limit reached. Rejecting fd=%d\n",i, msg.client_fd);
 				close(msg.client_fd);
 			}
 		} else {
 			// 收到了非预期的消息类型
-	LOG_ERROR(
-					"RealTimeSchedulerTask: Received unexpected message type in data queue. Closing fd=%d\n",
-					msg.client_fd);
+			LOG_ERROR("RealTimeSchedulerTask: Received unexpected message type in data queue. Closing fd=%d\n",msg.client_fd);
 			close(msg.client_fd);
 		}
 	}
@@ -216,31 +214,31 @@ static void run_net_send(void) {
  */
 static void cleanup_data_connection(int channel_index,
 		int client_index_in_array) {
-	ChannelState* channel = &g_channel_states[channel_index];
+	ChannelState* channel = g_channel_states;
 	if (client_index_in_array < 0
-			|| client_index_in_array >= channel->num_data_clients)
+			|| client_index_in_array >= channel[channel_index].num_data_clients)
 		return;
 
-	int fd_to_close = channel->data_client_fds[client_index_in_array];
+	int fd_to_close = channel[channel_index].data_client_fds[client_index_in_array];
 	close(fd_to_close);
 	LOG_INFO("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index,
 			fd_to_close);
 
 	// MODIFIED: Efficiently remove from array by swapping with the last element
-	int last_index = channel->num_data_clients - 1;
+	int last_index = channel[channel_index].num_data_clients - 1;
 	if (client_index_in_array != last_index) {
-		channel->data_client_fds[client_index_in_array] =
-				channel->data_client_fds[last_index];
+		channel[channel_index].data_client_fds[client_index_in_array] =
+				channel[channel_index].data_client_fds[last_index];
 	}
-	channel->data_client_fds[last_index] = -1; // Clear the last element
-	channel->num_data_clients--;
+	channel[channel_index].data_client_fds[last_index] = -1; // Clear the last element
+	channel[channel_index].num_data_clients--;
 
 	// Optional: Reset buffers only when the last client disconnects
-	if (channel->num_data_clients == 0) {
+	if (channel[channel_index].num_data_clients == 0) {
 		LOG_INFO("RT_Task: Ch %d has no clients left. Resetting buffers.\n",
 				channel_index);
-//        ring_buffer_init(&channel->buffer_net, channel->net_buffer_mem, RING_BUFFER_SIZE);
-//        ring_buffer_init(&channel->buffer_uart, channel->uart_buffer_mem, RING_BUFFER_SIZE);
+//        ring_buffer_init(&channel[channel_index].buffer_net, channel[channel_index].net_buffer_mem, RING_BUFFER_SIZE);
+//        ring_buffer_init(&channel[channel_index].buffer_uart, channel[channel_index].uart_buffer_mem, RING_BUFFER_SIZE);
 	}
 }
 

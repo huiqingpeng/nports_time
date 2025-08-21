@@ -43,7 +43,7 @@ int log_init(LogLevel initial_level)
     // 1. 创建日志消息队列
     s_log_msg_q = msgQCreate(LOG_QUEUE_MAX_MSGS, sizeof(LogMessage), MSG_Q_FIFO);
     if (s_log_msg_q == NULL) {
-        LOG_ERROR("FATAL: Failed to create log message queue.\n");
+        printf("FATAL: Failed to create log message queue.\n");
         return ERROR;
     }
 
@@ -55,7 +55,7 @@ int log_init(LogLevel initial_level)
                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     
     if (s_log_task_tid == ERROR) {
-        LOG_ERROR("FATAL: Failed to spawn log task.\n");
+        printf("FATAL: Failed to spawn log task.\n");
         msgQDelete(s_log_msg_q);
         return ERROR;
     }

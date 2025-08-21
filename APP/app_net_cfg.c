@@ -7,11 +7,11 @@
  *
  * =====================================================================================
  */
-#include "./inc/app_com.h"
-#include "./inc/app_cmd.h"
 #include <time.h> // For inactivity timeout check
 #include <stdlib.h> // For atoi, etc.
 #include <arpa/inet.h> // For htonl, ntohl etc.
+#include "./inc/app_com.h"
+#include "./inc/app_uart.h"
 
 // 内部宏定义
 #define INACTIVITY_TIMEOUT_SECONDS 300 // 5分钟无活动则超时
