@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "./HAL/hal_com.h"
+#include "./HAL/hal_log.h"
 #include "./HAL/hal_ringbuffer.h"
 
 /* ------------------ Application-Specific Constants ------------------ */
@@ -31,6 +32,12 @@
 #define MAX_CLIENTS_PER_CHANNEL 4 		// 每个通道最多允许4个客户端
 #define RING_BUFFER_SIZE        (8 * 1024) // 8KB 环形缓冲区大小
 #define MAX_CONFIG_CLIENTS      (NUM_PORTS + 1) // 最大配置客户端数量
+
+#define MAX_ALIAS_LEN               19
+#define MAX_MODEL_NAME_LEN          39
+#define MAX_SERVER_NAME_LEN         39
+#define MAX_PASSWORD_LEN            14
+#define MAX_SNMP_COMMUNITY_LEN      32 // 假设长度
 
 /* 网络端口定义 */
 #define TCP_DATA_PORT_START     950    // 数据通道起始端口 (950-965)
@@ -80,6 +87,8 @@ typedef struct {
  * @brief 每个通道（串口）的状态和数据结构
  */
 typedef struct {
+    /* -- Serial Settings -- */
+    char alias[MAX_ALIAS_LEN];
     /* -- 配置参数 -- */
     int baudrate;
     int data_bits;
@@ -89,12 +98,12 @@ typedef struct {
     int fifo_enable;
     int interface_type;
 
-    /* -- Operating Settings (0x05) -- */
-    int op_mode; // Real COM, TCP Server, etc.
-    int tcp_alive_check_time_min; // TCP alive check time in minutes
-    int max_connections; // For TCP Server Mode
-    int local_tcp_port; // For TCP Server Mode
-	
+    /* -- Operating Settings -- */
+    unsigned char op_mode;
+    unsigned char tcp_alive_check_time_min;
+    unsigned char max_connections;
+    unsigned short local_tcp_port;
+
     /* -- 实时数据缓冲区 -- */
     ring_buffer_t buffer_net;      // 网络 -> 串口 的数据缓冲区
     ring_buffer_t buffer_uart;     // 串口 -> 网络 的数据缓冲区
@@ -149,6 +158,49 @@ typedef struct
 	uint8_t pause_send; /* 加入待后续优化 */
 } UART_Config_Params;
 
+/**
+ * @brief 全局设备配置结构体
+ */
+typedef struct {
+    /* -- Overview -- */
+    char model_name[MAX_MODEL_NAME_LEN + 1];
+    unsigned char mac_address[6];
+    unsigned short serial_no;
+    unsigned char firmware_version[3];
+    unsigned char hardware_version[3];
+    unsigned char lcm_present;
+
+    /* -- Basic Settings -- */
+    char server_name[MAX_SERVER_NAME_LEN + 1];
+    char password[MAX_PASSWORD_LEN + 1];
+    // TODO: 添加时区、时间服务器等字段
+    unsigned char web_console_enabled;
+    unsigned char telnet_console_enabled;
+    unsigned char lcm_password_protected;
+    unsigned char reset_button_protected;
+
+    /* -- Network Settings -- */
+    unsigned int ip_address;
+    unsigned int netmask;
+    unsigned int gateway;
+    unsigned char ip_config_mode; // 0=Static, 1=DHCP, etc.
+    unsigned int dns_server1;
+    unsigned int dns_server2;
+    
+    // TODO: 添加SNMP和IP上报相关字段
+
+} DeviceSettings;
+
+
+/**
+ * @brief 包含整个系统所有配置的顶层结构体
+ */
+typedef struct {
+    DeviceSettings device;
+    ChannelState channels[NUM_PORTS];
+} SystemConfiguration;
+
+
 
 /* ------------------ Global Variable Declarations (extern) ------------------ */
 /*
@@ -169,6 +221,7 @@ extern MSG_Q_ID g_config_conn_q;
 
 // 主状态数组：包含所有16个通道的状态
 extern ChannelState g_channel_states[NUM_PORTS];
+extern SystemConfiguration g_system_config;
 
 extern void ConnectionManagerTask(void);
 extern void ConfigTaskManager(void);

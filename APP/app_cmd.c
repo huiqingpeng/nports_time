@@ -47,9 +47,9 @@ int  init_usart(UART_Config_Params *uart_instance,int client_socket, char *buf, 
 	char pack_buf[5] = {0};
 
 //	uart_buffer_init(channel);
-	/*ÌáÈ¡´®¿Ú²ÎÊı*/
+	/*æå–ä¸²å£å‚æ•°*/
 
-	/*ÉèÖÃ´®¿Ú²¨ÌØÂÊ*/
+	/*è®¾ç½®ä¸²å£æ³¢ç‰¹ç‡*/
 	int baud_rate = bauderate_table[(int)buf[2]];
 	uart_instance->config.baud_rate = baud_rate;
 	LOG_DEBUG("baud_rate: %d\n", uart_instance->config.baud_rate);
@@ -72,7 +72,7 @@ int  init_usart(UART_Config_Params *uart_instance,int client_socket, char *buf, 
 		LOG_DEBUG("stop_bit: %d\n", uart_instance->config.stop_bit);
 	}
 
-	/* 0b111000£¬ÓÃÓÚÌáÈ¡µÚ3 - 5Î»*/
+	/* 0b111000ï¼Œç”¨äºæå–ç¬¬3 - 5ä½*/
 	int last_mask = ((int)buf[3]) & 0x38;
 	switch (last_mask) {
 	case 0x00:
@@ -99,30 +99,30 @@ int  init_usart(UART_Config_Params *uart_instance,int client_socket, char *buf, 
 		LOG_ERROR("Unknown parity configuration:%02x \n",last_mask);
 		break;
 	}
-	/*µ÷ÓÃAXI_apiÉèÖÃ´®¿ÚÏà¹Ø¼Ä´æÆ÷*/
+	/*è°ƒç”¨AXI_apiè®¾ç½®ä¸²å£ç›¸å…³å¯„å­˜å™¨*/
 	axi165502CInit(uart_instance,channel);
 
 	uart_instance->config.usart_mcr_dtr = (unsigned char)buf[4];
 
 	uart_instance->config.usart_mcr_rts = (unsigned char)buf[5];
 
-	/* »ñÈ¡µ±Ç° MCR ¼Ä´æÆ÷Öµ*/
+	/* è·å–å½“å‰ MCR å¯„å­˜å™¨å€¼*/
 	unsigned int mcr_reg = userAxiCfgRead(channel, AXI_16550_MCR);
 
-	/*ÉèÖÃ DTR Î»*/
+	/*è®¾ç½® DTR ä½*/
 	if (uart_instance->config.usart_mcr_dtr) {
 		mcr_reg |= MCR_DTR;
 	} else {
 		mcr_reg &= ~MCR_DTR;
 	}
 
-	/* ÉèÖÃ RTS Î»*/
+	/* è®¾ç½® RTS ä½*/
 	if (uart_instance->config.usart_mcr_rts) {
 		mcr_reg |= MCR_RTS;
 	} else {
 		mcr_reg &= ~MCR_RTS;
 	}
-	/* Ğ´Èë¸üĞÂºóµÄ MCR ¼Ä´æÆ÷Öµ*/
+	/* å†™å…¥æ›´æ–°åçš„ MCR å¯„å­˜å™¨å€¼*/
 	//	userAxiCfgWrite(channel, AXI_16550_MCR, mcr_reg);
 
 	uart_instance->config.usart_crtscts = (unsigned char)buf[6];
@@ -139,17 +139,16 @@ int  init_usart(UART_Config_Params *uart_instance,int client_socket, char *buf, 
 	 * 
 	 * */
 
-	//´ò°üÊı¾İ
+	//æ‰“åŒ…æ•°æ®
 	pack_buf[0] = buf[0];
 	pack_buf[1] = 0x3;
 	pack_buf[2] = 0x0;
 	pack_buf[3] = 0x0;
 	pack_buf[4] = 0x0; 
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, pack_buf, sizeof(pack_buf));
 	if(ret < 0)
 	{
-		/*printf("send error\n");*/
 		return -1;
 	}
 
@@ -163,25 +162,24 @@ int  usart_set_baudrate(UART_Config_Params *uart_instance,int client_socket, cha
 	int ret;
 	unsigned int baud_rate;
 
-	/*ÌáÈ¡²¨ÌØÂÊ:¼ÙÉè¸ßÎ»ÔÚÇ°*/
+	/*æå–æ³¢ç‰¹ç‡:å‡è®¾é«˜ä½åœ¨å‰*/
 	baud_rate = buf[2] << 24 | buf[3] << 16 | buf[4] << 8 | buf[5];
 	uart_instance->config.baud_rate = baud_rate;
 
 	LOG_DEBUG("baud_rate: %d\n", baud_rate);
 
-	//µ÷ÓÃAXI_apiÉèÖÃ´®¿Ú²¨ÌØÂÊ
-	//´ò°üÊı¾İ
+	//è°ƒç”¨AXI_apiè®¾ç½®ä¸²å£æ³¢ç‰¹ç‡
+	//æ‰“åŒ…æ•°æ®
 	axi16550BaudInit(channel, uart_instance->config.baud_rate);
 
 	char response[3] = {0};
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 	if(ret < 0)
 	{
-		/*printf("send error\n");*/
 		return -1;
 	}
 
@@ -193,27 +191,26 @@ int usart_set_xon_xoff(int client_socket,int channel, char *buf, int buf_len)
 {
 	int ret;
 
-	/*×Ö·û´®±È½ÏVSTARTºÍVSTOP´Óbuf[2]¿ªÊ¼*/
+	/*å­—ç¬¦ä¸²æ¯”è¾ƒVSTARTå’ŒVSTOPä»buf[2]å¼€å§‹*/
 	if( (strcmp(&buf[2], "VSTART")) == 0)
 	{
-		/*µ÷ÓÃAXI_apiÉèÖÃXonXoff*/
-		/*		send_xon_xoff_char(channel, 1); // ·¢ËÍ XON*/
+		/*è°ƒç”¨AXI_apiè®¾ç½®XonXoff*/
+		/*		send_xon_xoff_char(channel, 1); // å‘é€ XON*/
 	}
 	else if( (strcmp(&buf[2], "VSTOP")) == 0)
 	{
-		/*		send_xon_xoff_char(channel, 0); // ·¢ËÍ XOFF*/
+		/*		send_xon_xoff_char(channel, 0); // å‘é€ XOFF*/
 	}
 
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	char response[3] = {0};
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 	if(ret < 0)
 	{
-		/*printf("send error\n");*/
 		return -1;
 	}
 
@@ -227,12 +224,10 @@ int usart_set_tx_fifo(int client_socket,int channel, char *buf, int buf_len)
 	int ret;
 
 	fifo_size = buf[2];
-	/*
-	//printf("fifo_size: %d\n", fifo_size);
 
-	//µ÷ÓÃAXI_apiÉèÖÃTX_FIFO
+	//è°ƒç”¨AXI_apiè®¾ç½®TX_FIFO
 
-	// ¸ù¾İ fifo_size ÅäÖÃ 16550 FCR ¼Ä´æÆ÷*/
+	// æ ¹æ® fifo_size é…ç½® 16550 FCR å¯„å­˜å™¨*/
 	unsigned char fcr_value = FCR_FIFO_ENABLE;
 	if (fifo_size == 1) {
 		fcr_value |= FCR_TRIGGER_LEVEL_1;
@@ -245,12 +240,11 @@ int usart_set_tx_fifo(int client_socket,int channel, char *buf, int buf_len)
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 
 	if(ret < 0)
 	{
-		/*printf("send error\n");*/
 		return -1;
 	}
 
@@ -264,31 +258,31 @@ int usart_set_line_control(int client_socket,int channel, char *buf, int buf_len
 	unsigned char dtr_val = buf[2];
 	unsigned char rts_val = buf[3];
 
-	/* »ñÈ¡µ±Ç° MCR ¼Ä´æÆ÷Öµ*/
+	/* è·å–å½“å‰ MCR å¯„å­˜å™¨å€¼*/
 	unsigned int mcr_reg = userAxiCfgRead(channel, AXI_16550_MCR);
 
-	/* ÉèÖÃ DTR Î»*/
+	/* è®¾ç½® DTR ä½*/
 	if (dtr_val) {
 		mcr_reg |= MCR_DTR;
 	} else {
 		mcr_reg &= ~MCR_DTR;
 	}
 
-	/* ÉèÖÃ RTS Î»*/
+	/* è®¾ç½® RTS ä½*/
 	if (rts_val) {
 		mcr_reg |= MCR_RTS;
 	} else {
 		mcr_reg &= ~MCR_RTS;
 	}
 
-	/* Ğ´Èë¸üĞÂºóµÄ MCR ¼Ä´æÆ÷Öµ*/
+	/* å†™å…¥æ›´æ–°åçš„ MCR å¯„å­˜å™¨å€¼*/
 	userAxiCfgWrite(channel, AXI_16550_MCR, mcr_reg);
 
 	char response[3] = {0};
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 	if(ret < 0)
 	{
@@ -306,7 +300,7 @@ int usart_set_xon(int client_socket,int channel, char *buf, int buf_len)
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 
 	if(ret < 0)
@@ -325,7 +319,7 @@ int usart_set_xoff(int client_socket,int channel, char *buf, int buf_len)
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 
 	if(ret < 0)
@@ -345,7 +339,7 @@ int usart_set_start_break(int client_socket,int channel, char *buf, int buf_len)
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 
 	if(ret < 0)
@@ -364,7 +358,7 @@ int usart_set_stop_break(int client_socket,int channel, char *buf, int buf_len)
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 
 	if(ret < 0)
@@ -381,13 +375,13 @@ int usart_report_queue(int client_socket, char *buf, int buf_len)
 
 	char pack_buf[4];
 
-	/*´ò°üÊı¾İ*/
+	/*æ‰“åŒ…æ•°æ®*/
 	pack_buf[0] = buf[0];
 	pack_buf[1] = 0x02;
 	pack_buf[2] = 0x00;
 	pack_buf[3] = 0x00;
 
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, pack_buf, sizeof(pack_buf));
 	if(ret < 0)
 	{
@@ -405,7 +399,7 @@ int usart_close(int client_socket, char *buf, int buf_len)
 	response[0] = buf[0];         
 	response[1] = 'O';            
 	response[2] = 'K';            
-	/*·µ»ØÊı¾İ¸øÖĞ¼ä¼ş*/
+	/*è¿”å›æ•°æ®ç»™ä¸­é—´ä»¶*/
 	ret = socket_send_to_middle(client_socket, response, sizeof(response));
 
 	if(ret < 0)
@@ -417,7 +411,7 @@ int usart_close(int client_socket, char *buf, int buf_len)
 
 void handle_command(UART_Config_Params *uart_instance,int client_socket, char *buf, int buf_len, int channel) 
 {
-	/*½âÎöÊı¾İ*/
+	/*è§£ææ•°æ®*/
 	unsigned char cmd = buf[0];
 	unsigned char data_len = buf[1];
 

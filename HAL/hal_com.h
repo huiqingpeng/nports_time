@@ -24,7 +24,7 @@
 #include <tickLib.h>
 #include <msgQLib.h>
 #include <netinet/in.h>
-
+#include "hal_log.h"
 
 #define VESION_H 1
 #define VESION_M 0
@@ -32,42 +32,13 @@
 
 #define UART_HW_FIFO_SIZE               (4096)
 
+
+
 #define BACKLOG   8
 #define LED_ON  1
 #define LED_OFF 0
 
-/* 日志等级控制宏（可用编译器 -D 传入） */
-#define LOG_LEVEL_ERROR	0
-#define LOG_LEVEL_INNFO	1
-#define LOG_LEVEL_DEBUG	2
 
-#ifndef LOG_LEVEL
-#define LOG_LEVEL  LOG_LEVEL_INNFO   // 0: ERROR only, 1: +INFO, 2: +DEBUG
-#endif
-
-/* 始终输出 */
-#define LOG_ERROR(fmt, ...) \
-    do { \
-        printf("[ERROR]:%d: " fmt "\n", __LINE__, ##__VA_ARGS__); \
-    } while (0)
-
-#if LOG_LEVEL >= 1
-#define LOG_INFO(fmt, ...) \
-    do { \
-        printf("[INFO ]:%d: " fmt "\n", __LINE__, ##__VA_ARGS__); \
-    } while (0)
-#else
-#define LOG_INFO(fmt, ...) do {} while (0)
-#endif
-
-#if LOG_LEVEL >= 2
-#define LOG_DEBUG(fmt, ...) \
-    do { \
-        printf("[DEBUG]:%d: " fmt "\n", __LINE__, ##__VA_ARGS__); \
-    } while (0)
-#else
-#define LOG_DEBUG(fmt, ...) do {} while (0)
-#endif
 
 /* State enumeration for TCP connections */
 typedef enum
@@ -92,8 +63,8 @@ typedef struct
 	uint16_t sample_tick_cnt_rx;
 	uint16_t sample_period_ticks_tx;
 	uint16_t sample_period_ticks_rx;
-	uint8_t tx_led_state;   // 0=灭,1=亮
-	uint8_t rx_led_state;   // 0=灭,1=亮
+	uint8_t tx_led_state;   
+	uint8_t rx_led_state;   
 } uart_led_stat_t;
 
 /* UART parameters */

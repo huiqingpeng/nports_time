@@ -10,9 +10,12 @@
  * =====================================================================================
  */
 #include "./inc/app_com.h"
-#include <timers.h>     // For POSIX timers if used as fallback, or custom timer driver header#include <intLib.h>     // For intConnect()
+#include <timers.h>     // For POSIX timers if used as fallback, or custom timer driver header
+#include <intLib.h>     // For intConnect()
+
 /* ------------------ Task-Specific Constants ------------------ */
-#define MEDIUM_FREQ_INTERVAL     (10)          // 中频任务执行间隔 (10 * 100µs = 1ms)
+#define MEDIUM_FREQ_INTERVAL     (10)          // 中频任务执行间隔 (10 * 100µs = 1ms)
+
 /* ------------------ Private Function Prototypes ------------------ */
 static void high_precision_timer_isr(void *arg);
 static int setup_high_precision_timer(void);
@@ -43,23 +46,21 @@ static void high_precision_timer_isr(void *arg) {
 void RealTimeSchedulerTask(void) {
 	unsigned int minor_cycle_counter = 0;
 
-	printf("RealTimeSchedulerTask: Starting...\n");
+	LOG_INFO("RealTimeSchedulerTask: Starting...\n");
 
 	// 1. 创建用于同步的二进制信号量
 	s_timer_sync_sem = semBCreate(SEM_Q_PRIORITY, SEM_EMPTY);
 	if (s_timer_sync_sem == NULL) {
-		fprintf(stderr,
-				"FATAL: RealTimeSchedulerTask failed to create sync semaphore.\n");
+		LOG_ERROR("FATAL: RealTimeSchedulerTask failed to create sync semaphore.\n");
 		return;
 	}
 
 	// 2. 设置并启动高精度硬件定时器
 	if (setup_high_precision_timer() != OK) {
-		fprintf(stderr,
-				"FATAL: RealTimeSchedulerTask failed to setup high-precision timer.\n");
+		LOG_ERROR("FATAL: RealTimeSchedulerTask failed to setup high-precision timer.\n");
 		return;
 	}
-	printf("RealTimeSchedulerTask: High-precision timer initialized.\n");
+	LOG_INFO("RealTimeSchedulerTask: High-precision timer initialized.\n");
 
 	/* ------------------ 主调度循环 ------------------ */
 	while (1) {
@@ -125,14 +126,14 @@ static void check_for_new_connections(void) {
 				// 		"RT_Task: Ch %d accepted new client fd=%d. Total clients: %d\n",
 				// 		i, msg.client_fd, g_channel_states[i].num_data_clients);
 			} else {
-				fprintf(stderr,
+	LOG_ERROR(
 						"RT_Task: Ch %d client limit reached. Rejecting fd=%d\n",
 						i, msg.client_fd);
 				close(msg.client_fd);
 			}
 		} else {
 			// 收到了非预期的消息类型
-			fprintf(stderr,
+	LOG_ERROR(
 					"RealTimeSchedulerTask: Received unexpected message type in data queue. Closing fd=%d\n",
 					msg.client_fd);
 			close(msg.client_fd);
@@ -160,7 +161,7 @@ static void run_net_recv(void) {
 				// 将收到的数据写入该通道的公共网络缓冲区
 //                ring_buffer_write_bytes(&g_channel_states[i].buffer_net, temp_buffer, n);
 				temp_buffer[n] = '\0';
-				printf("[ch%d][%d] %d : %s \r\n", i, j, n, temp_buffer);
+				LOG_INFO("[ch%d][%d] %d : %s \r\n", i, j, n, temp_buffer);
 			} else if (n == 0) {
 				cleanup_data_connection(i, j);
 			} else {
@@ -222,7 +223,7 @@ static void cleanup_data_connection(int channel_index,
 
 	int fd_to_close = channel->data_client_fds[client_index_in_array];
 	close(fd_to_close);
-	printf("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index,
+	LOG_INFO("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index,
 			fd_to_close);
 
 	// MODIFIED: Efficiently remove from array by swapping with the last element
@@ -236,7 +237,7 @@ static void cleanup_data_connection(int channel_index,
 
 	// Optional: Reset buffers only when the last client disconnects
 	if (channel->num_data_clients == 0) {
-		printf("RT_Task: Ch %d has no clients left. Resetting buffers.\n",
+		LOG_INFO("RT_Task: Ch %d has no clients left. Resetting buffers.\n",
 				channel_index);
 //        ring_buffer_init(&channel->buffer_net, channel->net_buffer_mem, RING_BUFFER_SIZE);
 //        ring_buffer_init(&channel->buffer_uart, channel->uart_buffer_mem, RING_BUFFER_SIZE);

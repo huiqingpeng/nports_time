@@ -1,70 +1,71 @@
 #include <vxWorks.h>
 #include <stdio.h>
-#include <intLib.h> /* ÓÃÓÚ intLock() ºÍ intUnlock() */
+#include <intLib.h> /* ç”¨äº intLock() å’Œ intUnlock() */
 #include "hal_timer.h"
+#include "hal_log.h"
 
-/* ---------------- API ´ÓÇı¶¯µ¼Èë (²»±ä) ---------------- */
-/* ¶¨Òå»Øµ÷º¯ÊıÀàĞÍ */
+/* ---------------- API ä»é©±åŠ¨å¯¼å…¥ (ä¸å˜) ---------------- */
+/* å®šä¹‰å›è°ƒå‡½æ•°ç±»å‹ */
 typedef void (*TTC_CALLBACK)(void *arg);
 
-/* ´Ó¶¨Ê±Æ÷Çı¶¯ÖĞ¡°µ¼Èë¡±ÎÒÃÇ´´½¨µÄAPIº¯Êı */
+/* ä»å®šæ—¶å™¨é©±åŠ¨ä¸­â€œå¯¼å…¥â€æˆ‘ä»¬åˆ›å»ºçš„APIå‡½æ•° */
 extern STATUS ttc_init_timer(int unit, UINT32 hz, TTC_CALLBACK func, void *arg);
 extern STATUS ttc_stop_timer(int unit);
 
-/* ---------------- ĞÂÔö£º¶¯Ì¬ÈÎÎñ×¢²á¿ò¼Ü ---------------- */
+/* ---------------- æ–°å¢ï¼šåŠ¨æ€ä»»åŠ¡æ³¨å†Œæ¡†æ¶ ---------------- */
 
-/* È«¾Ö±äÁ¿£¬ÓÃÓÚ±£´æÓÃ»§¶¯Ì¬×¢²áµÄÈÎÎñº¯Êı¼°Æä²ÎÊı */
-/* volatile ¹Ø¼ü×ÖÈ·±£±àÒëÆ÷Ã¿´Î¶¼´ÓÄÚ´æÖĞ¶ÁÈ¡£¬·ÀÖ¹ÓÅ»¯ÎÊÌâ */
+/* å…¨å±€å˜é‡ï¼Œç”¨äºä¿å­˜ç”¨æˆ·åŠ¨æ€æ³¨å†Œçš„ä»»åŠ¡å‡½æ•°åŠå…¶å‚æ•° */
+/* volatile å…³é”®å­—ç¡®ä¿ç¼–è¯‘å™¨æ¯æ¬¡éƒ½ä»å†…å­˜ä¸­è¯»å–ï¼Œé˜²æ­¢ä¼˜åŒ–é—®é¢˜ */
 static volatile APP_TASK_CALLBACK g_registered_func = NULL;
 static volatile void * g_registered_arg = NULL;
 
 /*
- * [ºËĞÄ] ÖĞ¶Ï·Ö·¢Æ÷ (ISR Dispatcher)
- * Õâ¸öº¯Êı±»×¢²á¸øÓ²¼ş¶¨Ê±Æ÷Çı¶¯£¬ËüÔÚÃ¿´ÎÖĞ¶ÏÊ±±»µ÷ÓÃ¡£
- * ËüµÄ¹¤×÷¾ÍÊÇÈ¥µ÷ÓÃÓÃ»§µ±Ç°×¢²áµÄ¶¯Ì¬ÈÎÎñ¡£
+ * [æ ¸å¿ƒ] ä¸­æ–­åˆ†å‘å™¨ (ISR Dispatcher)
+ * è¿™ä¸ªå‡½æ•°è¢«æ³¨å†Œç»™ç¡¬ä»¶å®šæ—¶å™¨é©±åŠ¨ï¼Œå®ƒåœ¨æ¯æ¬¡ä¸­æ–­æ—¶è¢«è°ƒç”¨ã€‚
+ * å®ƒçš„å·¥ä½œå°±æ˜¯å»è°ƒç”¨ç”¨æˆ·å½“å‰æ³¨å†Œçš„åŠ¨æ€ä»»åŠ¡ã€‚
  */
 void isr_dispatcher(void *arg) {
-	/* * ÎªÁË¾ø¶Ô°²È«£¬ÏÈ½«È«¾ÖÖ¸Õë¶Áµ½¾Ö²¿±äÁ¿ÖĞ¡£
-	 * Õâ¿ÉÒÔ·ÀÖ¹ÔÚ if ÅĞ¶ÏÖ®ºó¡¢º¯Êıµ÷ÓÃÖ®Ç°£¬Ö¸Õë±»ÆäËûÈÎÎñĞŞ¸ÄÎª NULL¡£
+	/* * ä¸ºäº†ç»å¯¹å®‰å…¨ï¼Œå…ˆå°†å…¨å±€æŒ‡é’ˆè¯»åˆ°å±€éƒ¨å˜é‡ä¸­ã€‚
+	 * è¿™å¯ä»¥é˜²æ­¢åœ¨ if åˆ¤æ–­ä¹‹åã€å‡½æ•°è°ƒç”¨ä¹‹å‰ï¼ŒæŒ‡é’ˆè¢«å…¶ä»–ä»»åŠ¡ä¿®æ”¹ä¸º NULLã€‚
 	 */
 	APP_TASK_CALLBACK func_to_call = g_registered_func;
 
 	if (func_to_call != NULL) {
-		/* Ö´ĞĞÓÃ»§×¢²áµÄ¶¯Ì¬ÈÎÎñ */
+		/* æ‰§è¡Œç”¨æˆ·æ³¨å†Œçš„åŠ¨æ€ä»»åŠ¡ */
 		func_to_call((void *) g_registered_arg);
 	}
 }
 
 /*
- * [API] ¶¯Ì¬×¢²áÒ»¸öÈÎÎñº¯Êı
- * func: ÄúÏ£ÍûÔÚÖĞ¶ÏÖĞÖ´ĞĞµÄº¯Êı
- * arg:  ´«µİ¸ø¸Ãº¯ÊıµÄ²ÎÊı
+ * [API] åŠ¨æ€æ³¨å†Œä¸€ä¸ªä»»åŠ¡å‡½æ•°
+ * func: æ‚¨å¸Œæœ›åœ¨ä¸­æ–­ä¸­æ‰§è¡Œçš„å‡½æ•°
+ * arg:  ä¼ é€’ç»™è¯¥å‡½æ•°çš„å‚æ•°
  */
 STATUS app_register_task(APP_TASK_CALLBACK func, void *arg) {
 	int lock_key;
 
 	if (func == NULL) {
-		printf("ERROR: Task function to register cannot be NULL.\n");
+		LOG_ERROR("ERROR: Task function to register cannot be NULL.\n");
 		return ERROR;
 	}
 
-	/* * ¹Ø¼ü°²È«µã£º¹Ø±ÕÖĞ¶Ï£¬ÒÔ·ÀÖ¹ÔÚĞŞ¸ÄÖ¸ÕëÊ±±»ISRÇÀÕ¼ 
-	 * ÕâÊÇÒ»¸öÔ­×Ó²Ù×÷¿éµÄ¿ªÊ¼
+	/* * å…³é”®å®‰å…¨ç‚¹ï¼šå…³é—­ä¸­æ–­ï¼Œä»¥é˜²æ­¢åœ¨ä¿®æ”¹æŒ‡é’ˆæ—¶è¢«ISRæŠ¢å  
+	 * è¿™æ˜¯ä¸€ä¸ªåŸå­æ“ä½œå—çš„å¼€å§‹
 	 */
 	lock_key = intLock();
 
 	g_registered_arg = arg;
-	g_registered_func = func; /* ×îºóÉèÖÃº¯ÊıÖ¸Õë£¬È·±£²ÎÊıÒÑ×¼±¸ºÃ */
+	g_registered_func = func; /* æœ€åè®¾ç½®å‡½æ•°æŒ‡é’ˆï¼Œç¡®ä¿å‚æ•°å·²å‡†å¤‡å¥½ */
 
-	/* »Ö¸´Ö®Ç°µÄÖĞ¶Ï×´Ì¬ */
+	/* æ¢å¤ä¹‹å‰çš„ä¸­æ–­çŠ¶æ€ */
 	intUnlock(lock_key);
 
-	printf("OK: Application task has been registered.\n");
+	LOG_INFO("OK: Application task has been registered.\n");
 	return OK;
 }
 
 /*
- * [API] ×¢Ïúµ±Ç°×¢²áµÄÈÎÎñº¯Êı
+ * [API] æ³¨é”€å½“å‰æ³¨å†Œçš„ä»»åŠ¡å‡½æ•°
  */
 STATUS app_unregister_task(void) {
 	int lock_key;
@@ -74,43 +75,43 @@ STATUS app_unregister_task(void) {
 	g_registered_arg = NULL;
 	intUnlock(lock_key);
 
-	printf("OK: Application task has been unregistered.\n");
+	LOG_INFO("OK: Application task has been unregistered.\n");
 	return OK;
 }
 
-/* ---------------- Ó¦ÓÃ³ÌĞòÂß¼­ºÍÊ¾Àı ---------------- */
+/* ---------------- åº”ç”¨ç¨‹åºé€»è¾‘å’Œç¤ºä¾‹ ---------------- */
 
-/* Ê¾ÀıÈÎÎñ1£ºÀÛ¼ÓÒ»¸ö¼ÆÊıÆ÷ */
+/* ç¤ºä¾‹ä»»åŠ¡1ï¼šç´¯åŠ ä¸€ä¸ªè®¡æ•°å™¨ */
 volatile int g_counter1 = 0;
 void user_task_increment_counter(void *arg) {
-	/* arg ¾ÍÊÇ´«µİ½øÀ´µÄÈ«¾Ö¼ÆÊıÆ÷µÄµØÖ· */
+	/* arg å°±æ˜¯ä¼ é€’è¿›æ¥çš„å…¨å±€è®¡æ•°å™¨çš„åœ°å€ */
 	volatile int *counter_ptr = (volatile int *) arg;
 	(*counter_ptr)++;
 }
 
-/* Ê¾ÀıÈÎÎñ2£º¼òµ¥´òÓ¡ (½öÓÃÓÚµÍÆµµ÷ÊÔ£¡) */
+/* ç¤ºä¾‹ä»»åŠ¡2ï¼šç®€å•æ‰“å° (ä»…ç”¨äºä½é¢‘è°ƒè¯•ï¼) */
 void user_task_print_message(void *arg) {
-	/* ¾¯¸æ£ºprintf·Ç³£Âı£¬Ö»ÄÜÔÚ¼«µÍÆµÂÊ(Èç1Hz)µÄÖĞ¶ÏÖĞÊ¹ÓÃ£¡ */
-	printf("Timer tick! Arg: %s\n", (char *) arg);
+	/* è­¦å‘Šï¼šprintféå¸¸æ…¢ï¼Œåªèƒ½åœ¨æä½é¢‘ç‡(å¦‚1Hz)çš„ä¸­æ–­ä¸­ä½¿ç”¨ï¼ */
+	LOG_INFO("Timer tick! Arg: %s\n", (char *) arg);
 }
 
-/* ---------------- Æô¶¯/Í£Ö¹/¼àÊÓ º¯Êı ---------------- */
+/* ---------------- å¯åŠ¨/åœæ­¢/ç›‘è§† å‡½æ•° ---------------- */
 
 /*
- * Æô¶¯º¯Êı
- * ËüÖ»¸ºÔğÆô¶¯µ×²ãµÄ¶¨Ê±Æ÷£¬²¢ÉèÖÃºÃÖĞ¶Ï·Ö·¢Æ÷¡£
+ * å¯åŠ¨å‡½æ•°
+ * å®ƒåªè´Ÿè´£å¯åŠ¨åº•å±‚çš„å®šæ—¶å™¨ï¼Œå¹¶è®¾ç½®å¥½ä¸­æ–­åˆ†å‘å™¨ã€‚
  */
 void app_start_hz(int unit, int hz) {
-	printf("Attempting to start dispatcher on timer unit %d at %d Hz.\n", unit,
+	LOG_INFO("Attempting to start dispatcher on timer unit %d at %d Hz.\n", unit,
 			hz);
 
-	/* ×¢Òâ£ºÕâÀï×¢²áµÄÊÇ¹Ì¶¨µÄ isr_dispatcher£¬¶ø²»ÊÇÓÃ»§µÄ¾ßÌåÈÎÎñ */
+	/* æ³¨æ„ï¼šè¿™é‡Œæ³¨å†Œçš„æ˜¯å›ºå®šçš„ isr_dispatcherï¼Œè€Œä¸æ˜¯ç”¨æˆ·çš„å…·ä½“ä»»åŠ¡ */
 	ttc_init_timer(unit, hz, isr_dispatcher, NULL);
 }
 
 /*
- * Í£Ö¹º¯Êı
- * Ëü»áÏÈ×¢Ïú¶¯Ì¬ÈÎÎñ£¬È»ºóÍ£Ö¹µ×²ã¶¨Ê±Æ÷¡£
+ * åœæ­¢å‡½æ•°
+ * å®ƒä¼šå…ˆæ³¨é”€åŠ¨æ€ä»»åŠ¡ï¼Œç„¶ååœæ­¢åº•å±‚å®šæ—¶å™¨ã€‚
  */
 void app_stop(int unit) {
 	app_unregister_task();
@@ -118,8 +119,8 @@ void app_stop(int unit) {
 }
 
 /*
- * ¸¨Öúº¯Êı£¬ÓÃÓÚ²é¿´¼ÆÊıÆ÷µÄÖµ
+ * è¾…åŠ©å‡½æ•°ï¼Œç”¨äºæŸ¥çœ‹è®¡æ•°å™¨çš„å€¼
  */
 void app_show_count(void) {
-	printf("Current counter1 value: %d\n", g_counter1);
+	LOG_INFO("Current counter1 value: %d\n", g_counter1);
 }

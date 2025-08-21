@@ -40,10 +40,13 @@ TASK_ID g_config_task_manager_tid;
  * @details 在VxWorks启动脚本中，通常会调用这个函数来启动整个应用。
  */
 void app_start(void) {
-	printf("\n\n--- Application Starting ---\n");
+	log_init(LOG_LEVEL_INFO);
+	ifconfig("gem0 192.168.8.4");
+
+	LOG_INFO("\n\n--- Application Starting ---\n");
 
 	/* ------------------ 1. 初始化全局资源 ------------------ */
-	printf("Initializing global resources...\n");
+	LOG_INFO("Initializing global resources...\n");
 
 	// 创建消息队列
 	// 参数: maxMsgs, maxMsgLength, options
@@ -51,22 +54,22 @@ void app_start(void) {
 	g_config_conn_q = msgQCreate(DATA_QUEUE_CAPACITY,sizeof(NewConnectionMsg), MSG_Q_FIFO);
 
 	if (g_data_conn_q == NULL || g_config_conn_q == NULL) {
-		fprintf(stderr, "FATAL: Failed to create message queues.\n");
+		LOG_ERROR("FATAL: Failed to create message queues.\n");
 		return;
 	}
-	printf("Message queues created.\n");
+	LOG_INFO("Message queues created.\n");
 
 	// 创建互斥锁
 	// 使用 SEM_INVERSION_SAFE 防止优先级反转
 	g_config_mutex = semMCreate(SEM_Q_PRIORITY | SEM_INVERSION_SAFE);
 	if (g_config_mutex == NULL) {
-		fprintf(stderr, "FATAL: Failed to create config mutex.\n");
+		LOG_ERROR("FATAL: Failed to create config mutex.\n");
 		return;
 	}
-	printf("Configuration mutex created.\n");
+	LOG_INFO("Configuration mutex created.\n");
 
 	/* ------------------ 2. 初始化通道状态 ------------------ */
-	printf("Initializing channel states...\n");
+	LOG_INFO("Initializing channel states...\n");
 	int i,j;
 	for (i = 0; i < NUM_PORTS; i++) {
 		// 设置默认配置
@@ -86,10 +89,10 @@ void app_start(void) {
 		ring_buffer_init(&g_channel_states[i].buffer_uart,
 				g_channel_states[i].uart_buffer_mem, RING_BUFFER_SIZE);
 	}
-	printf("All %d channel states initialized.\n", NUM_PORTS);
+	LOG_INFO("All %d channel states initialized.\n", NUM_PORTS);
 
 	/* ------------------ 3. 创建应用程序任务 ------------------ */
-	printf("Spawning application tasks...\n");
+	LOG_INFO("Spawning application tasks...\n");
 
 	// 创建 ConnectionManagerTask
 	g_conn_manager_tid = taskSpawn("tConnManager",
@@ -110,11 +113,11 @@ void app_start(void) {
 
 	if (g_conn_manager_tid == ERROR || g_config_task_manager_tid == ERROR
 			|| g_realtime_scheduler_tid == ERROR) {
-		fprintf(stderr, "FATAL: Failed to spawn one or more tasks.\n");
+		LOG_ERROR("FATAL: Failed to spawn one or more tasks.\n");
 		// 此处可能需要清理已创建的资源
 		return;
 	}
 
-	printf("All tasks spawned successfully.\n");
-	printf("--- Application Initialization Complete ---\n\n");
+	LOG_INFO("All tasks spawned successfully.\n");
+	LOG_INFO("--- Application Initialization Complete ---\n\n");
 }

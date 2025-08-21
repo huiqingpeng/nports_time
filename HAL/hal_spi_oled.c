@@ -445,7 +445,7 @@ void OLED_Init(void)
     OLED_WR_Byte(0x22, OLED_CMD); OLED_WR_Byte(0, OLED_CMD); OLED_WR_Byte(7,  OLED_CMD);
 	OLED_Clear();
 	OLED_WR_Byte(0xAF,OLED_CMD);
-	printf("OLED_Init Done ....\n");
+	LOG_INFO("OLED_Init Done ....\n");
 }
 
 
@@ -464,5 +464,4 @@ void BRAM_Read(void)
 {
     unsigned int data = 0;
     data = PL_AXI_ReadReg(PL_AXI_BASE,0x400);
-	printf("BRAM:%d ....\n",data);
 }

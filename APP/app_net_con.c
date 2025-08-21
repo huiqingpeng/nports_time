@@ -33,30 +33,30 @@ TASK_ID g_conn_manager_tid;
 void ConnectionManagerTask(void)
 {
     int i;
-    printf("ConnectionManagerTask: Starting...\n");
+    LOG_INFO("ConnectionManagerTask: Starting...\n");
 
     /* ------------------ 1. 使用映射表初始化所有监听端口 ------------------ */
     for (i = 0; i < NUM_PORTS; i++) {
         g_port_mappings[i].data_listen_fd = setup_listening_socket(g_port_mappings[i].data_port);
         if (g_port_mappings[i].data_listen_fd < 0) {
-            fprintf(stderr, "FATAL: Failed to create data socket for channel %d on port %d\n", i, g_port_mappings[i].data_port);
+            LOG_ERROR("FATAL: Failed to create data socket for channel %d on port %d\n", i, g_port_mappings[i].data_port);
             return;
         }
 
         g_port_mappings[i].set_listen_fd = setup_listening_socket(g_port_mappings[i].set_port);
         if (g_port_mappings[i].set_listen_fd < 0) {
-            fprintf(stderr, "FATAL: Failed to create set socket for channel %d on port %d\n", i, g_port_mappings[i].set_port);
+            LOG_ERROR("FATAL: Failed to create set socket for channel %d on port %d\n", i, g_port_mappings[i].set_port);
             return;
         }
     }
 
     g_setting_listen_fd = setup_listening_socket(TCP_SETTING_PORT);
     if (g_setting_listen_fd < 0) {
-        fprintf(stderr, "FATAL: Failed to create global setting socket on port %d\n", TCP_SETTING_PORT);
+        LOG_ERROR("FATAL: Failed to create global setting socket on port %d\n", TCP_SETTING_PORT);
         return;
     }
 
-    printf("ConnectionManagerTask: All %d listening sockets are ready.\n", (NUM_PORTS * 2) + 1);
+    LOG_INFO("ConnectionManagerTask: All %d listening sockets are ready.\n", (NUM_PORTS * 2) + 1);
 
     /* ------------------ 2. 主循环，使用 select 等待连接 ------------------ */
     while (1)
@@ -101,7 +101,7 @@ void ConnectionManagerTask(void)
                     msg.client_fd = client_fd;
                     set_socket_non_blocking(client_fd);
                     set_tcp_keepalive(client_fd, 60, 5, 3);
-                    printf("[%d ]CONN_TYPE_DATA:[%d]\r\n",i,msg.channel_index);
+                    LOG_INFO("[%d ]CONN_TYPE_DATA:[%d]\r\n",i,msg.channel_index);
                     if (msgQSend(g_data_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
                         printf(stderr, "CRITICAL: Data queue full! Dropping connection for channel %d.\n", i);
                         close(client_fd);
@@ -118,9 +118,9 @@ void ConnectionManagerTask(void)
                     msg.channel_index = g_port_mappings[i].channel_index;
                     msg.client_fd = client_fd;
                     set_socket_non_blocking(client_fd);
-                    printf("[%d ]CONN_TYPE_SET:[%d]\r\n",i,msg.channel_index);
+                    LOG_INFO("[%d ]CONN_TYPE_SET:[%d]\r\n",i,msg.channel_index);
                     if (msgQSend(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
-                        fprintf(stderr, "CRITICAL: Config queue full! Dropping connection for channel %d.\n", i);
+                        LOG_ERROR("CRITICAL: Config queue full! Dropping connection for channel %d.\n", i);
                         close(client_fd);
                     }
                 }
@@ -138,7 +138,7 @@ void ConnectionManagerTask(void)
                 set_socket_non_blocking(client_fd);
                 
                 if (msgQSend(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
-                    fprintf(stderr, "CRITICAL: Config queue full! Dropping global setting connection.\n");
+                    LOG_ERROR("CRITICAL: Config queue full! Dropping global setting connection.\n");
                     close(client_fd);
                 }
             }
@@ -192,7 +192,7 @@ static int setup_listening_socket(int port) {
 		return -1;
 	}
 
-	printf("Successfully created listening socket on port %d, fd=%d\n", port,
+	LOG_INFO("Successfully created listening socket on port %d, fd=%d\n", port,
 			sock_fd);
 	return sock_fd;
 }
