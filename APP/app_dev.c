@@ -21,6 +21,79 @@ static int write_config_to_flash(const SystemConfiguration* config);
 
 /* ------------------ Public API Implementations ------------------ */
 
+/**
+ * @brief 打印当前系统所有配置信息以供调试
+ * @details 依次打印全局设备设置和每个通道的详细配置。
+ * 为保证打印数据的一致性，函数会获取配置互斥锁。
+ */
+void dev_config_print(void)
+{
+    int i;
+    char ip_str[INET_ADDRSTRLEN];
+    char netmask_str[INET_ADDRSTRLEN];
+    char gateway_str[INET_ADDRSTRLEN];
+
+    LOG_INFO("\n");
+    LOG_INFO("============================================================");
+    LOG_INFO("=========       Current System Configuration       =========");
+    LOG_INFO("============================================================");
+
+    // 获取互斥锁，以线程安全的方式读取全局配置
+    if (semTake(g_config_mutex, WAIT_FOREVER) == OK)
+    {
+        // --- 进入临界区 ---
+
+        /* --- 打印全局设备设置 --- */
+        DeviceSettings* dev = &g_system_config.device;
+        LOG_INFO("[Device Settings]");
+        LOG_INFO("  - Model Name: %s", dev->model_name);
+        LOG_INFO("  - Server Name: %s", dev->server_name);
+        LOG_INFO("  - MAC Address: %02X:%02X:%02X:%02X:%02X:%02X",
+                 dev->mac_address[0], dev->mac_address[1], dev->mac_address[2],
+                 dev->mac_address[3], dev->mac_address[4], dev->mac_address[5]);
+        LOG_INFO("  - Serial No: %u", dev->serial_no);
+        LOG_INFO("  - Firmware Version: %d.%d.%d",
+                 dev->firmware_version[0], dev->firmware_version[1], dev->firmware_version[2]);
+        LOG_INFO("  - Hardware Version: %d.%d.%d",
+                 dev->hardware_version[0], dev->hardware_version[1], dev->hardware_version[2]);
+        LOG_INFO("  - Password: %s", dev->password);
+
+        // 转换IP地址为字符串进行打印
+        inet_ntop(AF_INET, &dev->ip_address, ip_str, sizeof(ip_str));
+        inet_ntop(AF_INET, &dev->netmask, netmask_str, sizeof(netmask_str));
+        inet_ntop(AF_INET, &dev->gateway, gateway_str, sizeof(gateway_str));
+
+        LOG_INFO("  - IP Config Mode: %s", (dev->ip_config_mode == 1) ? "DHCP" : "Static");
+        LOG_INFO("  - IP Address: %s", ip_str);
+        LOG_INFO("  - Netmask: %s", netmask_str);
+        LOG_INFO("  - Gateway: %s", gateway_str);
+        LOG_INFO("------------------------------------------------------------");
+
+        /* --- 循环打印每个通道的设置 --- */
+        for (i = 0; i < NUM_PORTS; i++) {
+            ChannelState* ch = &g_system_config.channels[i];
+            LOG_INFO("[Channel %d Settings]", i + 1);
+            LOG_INFO("  - Alias: %s", ch->alias);
+            LOG_INFO("  - Baudrate: %d", ch->baudrate);
+            LOG_INFO("  - Data Bits: %d", ch->data_bits);
+            LOG_INFO("  - Stop Bits: %d", ch->stop_bits);
+            LOG_INFO("  - Parity: %d", ch->parity);
+            LOG_INFO("  - Flow Control: %d", ch->flow_ctrl);
+            LOG_INFO("  - Operation Mode: %d", ch->op_mode);
+            LOG_INFO("  - Max Connections: %d", ch->max_connections);
+            // 您可以根据需要继续添加其他需要打印的通道变量
+            LOG_INFO("------------------------------------------------------------");
+        }
+
+        // --- 退出临界区 ---
+        semGive(g_config_mutex);
+    } else {
+        LOG_ERROR("FATAL: Could not take config mutex to print configuration.");
+    }
+    LOG_INFO("============================================================");
+    LOG_INFO("\n");
+}
+
 int dev_config_init(void)
 {
 	LOG_INFO("Initializing device configuration...\n");
@@ -77,7 +150,7 @@ void dev_config_load_defaults(void)
 
         /* --- 加载全局设备默认设置 --- */
         DeviceSettings* dev = &g_system_config.device;
-        strncpy(dev->model_name, "FPGA Serial Server V1.2.3", MAX_MODEL_NAME_LEN);
+        strncpy(dev->model_name, "WQ-NPORTS-16", MAX_MODEL_NAME_LEN);
         // TODO: 从硬件读取真实的MAC地址
         unsigned char default_mac[6] = {0x00, 0x0E, 0xC6, 0x01, 0x02, 0x03};
         memcpy(dev->mac_address, default_mac, 6);
@@ -87,9 +160,9 @@ void dev_config_load_defaults(void)
         strncpy(dev->server_name, "SerialServer_Default", MAX_SERVER_NAME_LEN);
         strncpy(dev->password, "admin", MAX_PASSWORD_LEN);
         dev->ip_config_mode = 1; // DHCP
-        dev->ip_address = inet_addr("192.168.1.100");
+        dev->ip_address = inet_addr("192.168.8.4");
         dev->netmask = inet_addr("255.255.255.0");
-        dev->gateway = inet_addr("192.168.1.1");
+        dev->gateway = inet_addr("192.168.8.1");
 
         /* --- 加载每个通道的默认设置 --- */
         for (i = 0; i < NUM_PORTS; i++) {
@@ -156,4 +229,7 @@ static int write_config_to_flash(const SystemConfiguration* config)
     // 7. 返回 OK 或 ERROR
     return OK; // 暂时返回成功
 }
+
+
+
 

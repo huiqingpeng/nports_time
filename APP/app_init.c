@@ -18,7 +18,7 @@
 #define REALTIME_SCHEDULER_PRIORITY   50
 #define CONFIG_TASK_MANAGER_PRIORITY  60
 #define CONN_MANAGER_PRIORITY         70
-#define UDP_SEARCH_PRIORITY           80
+#define UDP_SEARCH_PRIORITY           75
 
 
 // 任务栈大小
@@ -54,7 +54,6 @@ void app_start(void) {
 
 	// 创建消息队列
 	// 参数: maxMsgs, maxMsgLength, options
-	dev_config_init();
 	g_data_conn_q = msgQCreate(DATA_QUEUE_CAPACITY, sizeof(NewConnectionMsg),MSG_Q_FIFO);
 	g_config_conn_q = msgQCreate(DATA_QUEUE_CAPACITY,sizeof(NewConnectionMsg), MSG_Q_FIFO);
 
@@ -72,7 +71,7 @@ void app_start(void) {
 		return;
 	}
 	LOG_INFO("Configuration mutex created.\n");
-
+	dev_config_init();
 	/* ------------------ 2. 初始化通道状态 ------------------ */
 	LOG_INFO("Initializing channel states...\n");
 	for (i = 0; i < NUM_PORTS; i++) {

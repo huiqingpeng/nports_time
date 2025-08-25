@@ -182,5 +182,9 @@ void dev_config_load_defaults(void);
  */
 void dev_reboot(void);
 
+/**
+ * @brief 打印当前系统所有配置信息以供调试
+ */
+void dev_config_print(void);
 
 #endif /* APP_DEV_H */

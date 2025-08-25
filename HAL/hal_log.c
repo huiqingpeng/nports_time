@@ -18,8 +18,8 @@
 /* ------------------ Internal Constants ------------------ */
 #define LOG_TASK_PRIORITY   250  // 日志任务使用非常低的优先级
 #define LOG_TASK_STACK_SIZE 8192 // 8KB 栈大小
-#define LOG_QUEUE_MAX_MSGS  100  // 日志消息队列容量
-#define MAX_LOG_MSG_LEN     512  // 每条日志消息的最大长度
+#define LOG_QUEUE_MAX_MSGS  500  // 日志消息队列容量
+#define MAX_LOG_MSG_LEN     1024  // 每条日志消息的最大长度
 
 /* ------------------ Internal Data Structures ------------------ */
 typedef struct {
