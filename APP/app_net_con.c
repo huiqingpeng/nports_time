@@ -38,16 +38,28 @@ void ConnectionManagerTask(void)
     /* ------------------ 1. 使用映射表初始化所有监听端口 ------------------ */
     for (i = 0; i < NUM_PORTS; i++) {
         g_port_mappings[i].data_listen_fd = setup_listening_socket(g_port_mappings[i].data_port);
+        semTake(g_config_mutex, WAIT_FOREVER);
         if (g_port_mappings[i].data_listen_fd < 0) {
-            LOG_ERROR("FATAL: Failed to create data socket for channel %d on port %d\n", i, g_port_mappings[i].data_port);
-            return;
+            /* --- STATE UPDATE --- */
+            g_system_config.channels[i].data_net_info.state = NET_STATE_ERROR;
+        } else {
+            /* --- STATE UPDATE --- */
+            g_system_config.channels[i].data_net_info.state = NET_STATE_LISTENING;
         }
+        semGive(g_config_mutex);
+
 
         g_port_mappings[i].set_listen_fd = setup_listening_socket(g_port_mappings[i].set_port);
+        semTake(g_config_mutex, WAIT_FOREVER);
         if (g_port_mappings[i].set_listen_fd < 0) {
-            LOG_ERROR("FATAL: Failed to create set socket for channel %d on port %d\n", i, g_port_mappings[i].set_port);
-            return;
+            /* --- STATE UPDATE --- */
+            g_system_config.channels[i].cmd_net_info.state = NET_STATE_ERROR;
+        } else {
+            /* --- STATE UPDATE --- */
+            g_system_config.channels[i].cmd_net_info.state = NET_STATE_LISTENING;
         }
+        semGive(g_config_mutex);
+
     }
 
     g_setting_listen_fd = setup_listening_socket(TCP_SETTING_PORT);
@@ -82,7 +94,7 @@ void ConnectionManagerTask(void)
 
         if (ret <= 0) {
             if (ret < 0 && errno != EINTR) {
-                perror("ConnectionManagerTask: select() error");
+                LOG_ERROR("ConnectionManagerTask: select() error");
                 taskDelay(sysClkRateGet());
             }
             continue; // 超时或被信号中断，继续下一次循环
@@ -159,14 +171,14 @@ static int setup_listening_socket(int port) {
 
 	// 1. 创建socket
 	if ((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-		perror("socket() failed");
+		LOG_ERROR("socket() failed");
 		return -1;
 	}
 
 	// 2. 设置SO_REUSEADDR选项，允许服务器快速重启
 	if (setsockopt(sock_fd, SOL_SOCKET, SO_REUSEADDR, (char *) &optval,
 			sizeof(optval)) < 0) {
-		perror("setsockopt(SO_REUSEADDR) failed");
+		LOG_ERROR("setsockopt(SO_REUSEADDR) failed");
 		close(sock_fd);
 		return -1;
 	}
@@ -180,14 +192,14 @@ static int setup_listening_socket(int port) {
 	// 4. 绑定地址
 	if (bind(sock_fd, (struct sockaddr *) &server_addr, sizeof(server_addr))
 			< 0) {
-		perror("bind() failed");
+		LOG_ERROR("bind() failed");
 		close(sock_fd);
 		return -1;
 	}
 
 	// 5. 开始监听
 	if (listen(sock_fd, LISTEN_BACKLOG) < 0) {
-		perror("listen() failed");
+		LOG_ERROR("listen() failed");
 		close(sock_fd);
 		return -1;
 	}
@@ -208,7 +220,7 @@ static void set_socket_non_blocking(int sock_fd) {
 	// FIONBIO: File I/O Non-Blocking I/O
 	// 这是在VxWorks中设置非阻塞模式最常用、最可靠的方法。
 	if (ioctl(sock_fd, FIONBIO, (int) &on) < 0) {
-		perror("ioctl(FIONBIO) failed");
+		LOG_ERROR("ioctl(FIONBIO) failed");
 		// 在实际应用中，这里可能需要更详细的错误日志
 	}
 }
@@ -228,25 +240,25 @@ static void set_tcp_keepalive(int sock_fd, int keepidle, int keepintl,
 	// 1. 启用 SO_KEEPALIVE 选项
 	if (setsockopt(sock_fd, SOL_SOCKET, SO_KEEPALIVE, (char *) &optval,
 			sizeof(optval)) < 0) {
-		perror("setsockopt(SO_KEEPALIVE) failed");
+		LOG_ERROR("setsockopt(SO_KEEPALIVE) failed");
 		return; // 如果基础选项失败，后续设置无意义
 	}
 
 	// 2. 设置 TCP_KEEPIDLE: 空闲多长时间后开始探测
 	if (setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &keepidle,
 			sizeof(keepidle)) < 0) {
-		perror("setsockopt(TCP_KEEPIDLE) failed");
+		LOG_ERROR("setsockopt(TCP_KEEPIDLE) failed");
 	}
 
 	// 3. 设置 TCP_KEEPINTVL: 探测间隔
 	if (setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPINTVL, (char *) &keepintl,
 			sizeof(keepintl)) < 0) {
-		perror("setsockopt(TCP_KEEPINTVL) failed");
+		LOG_ERROR("setsockopt(TCP_KEEPINTVL) failed");
 	}
 
 	// 4. 设置 TCP_KEEPCNT: 探测次数
 	if (setsockopt(sock_fd, IPPROTO_TCP, TCP_KEEPCNT, (char *) &keepcnt,
 			sizeof(keepcnt)) < 0) {
-		perror("setsockopt(TCP_KEEPCNT) failed");
+		LOG_ERROR("setsockopt(TCP_KEEPCNT) failed");
 	}
 }

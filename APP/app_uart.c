@@ -30,7 +30,7 @@ int socket_send_to_middle(int sock_fd, char *buf, int buf_len) {
 	int i = 0;
 	int ret = send(sock_fd, buf, buf_len, 0);
 	if (ret < 0) {
-		perror("send");
+		LOG_ERROR("send");
 		return -1;
 	}
 	return 0;

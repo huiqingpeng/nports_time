@@ -33,7 +33,6 @@ static void cleanup_data_connection(int channel_index,
 static SEM_ID s_timer_sync_sem; // 用于定时器ISR与任务同步的二进制信号量
 
 /* ------------------ Global Variable Definitions ------------------ */
-extern TASK_ID g_realtime_scheduler_tid;
 
 static void high_precision_timer_isr(void *arg) {
 	// ISR中唯一要做的事：释放信号量唤醒实时任务
@@ -92,6 +91,7 @@ static void run_high_frequency_tasks(void) {
 	int i;
 	for (i = 0; i < NUM_PORTS; i++) {
 		// TODO: 从串口硬件FIFO读取数据到 g_channel_states[i].buffer_uart
+
 	}
 
 	for (i = 0; i < NUM_PORTS; i++) {
@@ -112,31 +112,36 @@ static void run_medium_frequency_tasks(void) {
  * @brief 检查并接管来自ConnectionManager的新数据连接
  */
 static void check_for_new_connections(void) {
-	NewConnectionMsg msg;
-	// 以非阻塞方式检查消息队列
-	while (msgQReceive(g_data_conn_q, (char*) &msg, sizeof(msg), NO_WAIT)
-			!= ERROR) {
-		if (msg.type
-				== CONN_TYPE_DATA&& msg.channel_index >= 0 && msg.channel_index < NUM_PORTS) {
-			int i = msg.channel_index;
-			// MODIFIED: Logic to add to client list instead of overwriting
-			if (g_channel_states[i].num_data_clients < MAX_CLIENTS_PER_CHANNEL) {
-				int client_idx = g_channel_states[i].num_data_clients;
-				g_channel_states[i].data_client_fds[client_idx] = msg.client_fd;
-				g_channel_states[i].num_data_clients++;
-				// printf(
-				// 		"RT_Task: Ch %d accepted new client fd=%d. Total clients: %d\n",
-				// 		i, msg.client_fd, g_channel_states[i].num_data_clients);
-			} else {
-				LOG_ERROR("RT_Task: Ch %d client limit reached. Rejecting fd=%d\n",i, msg.client_fd);
-				close(msg.client_fd);
-			}
-		} else {
-			// 收到了非预期的消息类型
-			LOG_ERROR("RealTimeSchedulerTask: Received unexpected message type in data queue. Closing fd=%d\n",msg.client_fd);
-			close(msg.client_fd);
-		}
-	}
+    NewConnectionMsg msg;
+    while (msgQReceive(g_data_conn_q, (char*)&msg, sizeof(msg), NO_WAIT) == OK) {
+        if (msg.type == CONN_TYPE_DATA && msg.channel_index >= 0 && msg.channel_index < NUM_PORTS) {
+            int i = msg.channel_index;
+            ChannelState* channel = &g_system_config.channels[i];
+
+            semTake(g_config_mutex, WAIT_FOREVER);
+            if (channel->data_net_info.num_clients < MAX_CLIENTS_PER_CHANNEL) {
+                int client_idx = channel->data_net_info.num_clients;
+                channel->data_net_info.client_fds[client_idx] = msg.client_fd;
+                
+                if (channel->data_net_info.num_clients == 0) {
+                    /* --- STATE UPDATE --- */
+                    // 第一个客户端连接，状态从 LISTENING 变为 CONNECTED
+                    channel->data_net_info.state = NET_STATE_CONNECTED;
+                }
+                channel->data_net_info.num_clients++;
+                
+                printf("RT_Task: Ch %d accepted new client fd=%d. Total clients: %d\n", i, msg.client_fd, channel->data_net_info.num_clients);
+
+            } else {
+                fprintf(stderr, "RT_Task: Ch %d client limit reached. Rejecting fd=%d\n", i, msg.client_fd);
+                close(msg.client_fd);
+            }
+            semGive(g_config_mutex);
+
+        } else {
+            close(msg.client_fd);
+        }
+    }
 }
 
 /**
@@ -212,34 +217,36 @@ static void run_net_send(void) {
 /**
  * @brief 清理一个已断开的数据连接
  */
-static void cleanup_data_connection(int channel_index,
-		int client_index_in_array) {
-	ChannelState* channel = g_channel_states;
-	if (client_index_in_array < 0
-			|| client_index_in_array >= channel[channel_index].num_data_clients)
-		return;
+static void cleanup_data_connection(int channel_index, int client_index_in_array) {
+    semTake(g_config_mutex, WAIT_FOREVER);
+    ChannelState* channel = &g_system_config.channels[channel_index];
+    if (client_index_in_array < 0 || client_index_in_array >= channel->data_net_info.num_clients) {
+        semGive(g_config_mutex);
+        return;
+    }
 
-	int fd_to_close = channel[channel_index].data_client_fds[client_index_in_array];
-	close(fd_to_close);
-	LOG_INFO("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index,
-			fd_to_close);
+    int fd_to_close = channel->data_net_info.client_fds[client_index_in_array];
+    close(fd_to_close);
+    printf("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index, fd_to_close);
 
-	// MODIFIED: Efficiently remove from array by swapping with the last element
-	int last_index = channel[channel_index].num_data_clients - 1;
-	if (client_index_in_array != last_index) {
-		channel[channel_index].data_client_fds[client_index_in_array] =
-				channel[channel_index].data_client_fds[last_index];
-	}
-	channel[channel_index].data_client_fds[last_index] = -1; // Clear the last element
-	channel[channel_index].num_data_clients--;
+    int last_index = channel->data_net_info.num_clients - 1;
+    if (client_index_in_array != last_index) {
+        channel->data_net_info.client_fds[client_index_in_array] = channel->data_net_info.client_fds[last_index];
+    }
+    channel->data_net_info.client_fds[last_index] = -1;
+    channel->data_net_info.num_clients--;
 
-	// Optional: Reset buffers only when the last client disconnects
-	if (channel[channel_index].num_data_clients == 0) {
-		LOG_INFO("RT_Task: Ch %d has no clients left. Resetting buffers.\n",
-				channel_index);
-//        ring_buffer_init(&channel[channel_index].buffer_net, channel[channel_index].net_buffer_mem, RING_BUFFER_SIZE);
-//        ring_buffer_init(&channel[channel_index].buffer_uart, channel[channel_index].uart_buffer_mem, RING_BUFFER_SIZE);
-	}
+    if (channel->data_net_info.num_clients == 0) {
+        /* --- STATE UPDATE --- */
+        // 最后一个客户端断开，状态从 CONNECTED 变回 LISTENING
+        channel->data_net_info.state = NET_STATE_LISTENING;
+        printf("RT_Task: Ch %d has no clients left. State -> LISTENING.\n", channel_index);
+        
+        // 可选：当最后一个客户端断开时，才重置缓冲区
+        // ring_buffer_init(&channel->buffer_net, channel->net_buffer_mem, RING_BUFFER_SIZE);
+        // ring_buffer_init(&channel->buffer_uart, channel->uart_buffer_mem, RING_BUFFER_SIZE);
+    }
+    semGive(g_config_mutex);
 }
 
 /**

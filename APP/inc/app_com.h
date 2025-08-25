@@ -77,12 +77,6 @@ typedef struct {
 /*
  * 在.c文件中定义的全局变量，在此处用extern声明，以便其他文件可以访问。
  */
-
-// 任务ID
-extern TASK_ID g_conn_manager_tid;
-extern TASK_ID g_realtime_scheduler_tid;
-extern TASK_ID g_config_task_manager_tid;
-
 // 消息队列ID
 extern MSG_Q_ID g_data_conn_q;
 extern MSG_Q_ID g_config_conn_q;

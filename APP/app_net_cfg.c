@@ -81,6 +81,13 @@ void ConfigTaskManager(void)
                 s_sessions[new_index].last_activity_time = time(NULL);
                 s_sessions[new_index].rx_bytes = 0;
                 s_num_active_sessions++;
+                if (msg.type == CONN_TYPE_SET && msg.channel_index >= 0) {
+                    semTake(g_config_mutex, WAIT_FOREVER);
+                    g_system_config.channels[msg.channel_index].cmd_net_info.state = NET_STATE_CONNECTED;
+                    // 同时保存fd，便于双向查找
+                    g_system_config.channels[msg.channel_index].cmd_net_info.client_fd = msg.client_fd;
+                    semGive(g_config_mutex);
+                }
                 LOG_INFO("ConfigTask: Accepted new config connection fd=%d\n", msg.client_fd);
             } else {
                 LOG_ERROR("ConfigTaskManager: Max config clients reached. Rejecting fd=%d\n", msg.client_fd);
@@ -110,7 +117,7 @@ void ConfigTaskManager(void)
 
         if (ret < 0) {
             if (errno == EINTR) continue;
-            perror("ConfigTaskManager: select() error");
+            LOG_ERROR("ConfigTaskManager: select() error");
             taskDelay(sysClkRateGet());
             continue;
         }
@@ -345,7 +352,18 @@ static void send_simple_ack(int fd, unsigned char cmd_id, unsigned char sub_id, 
 
 static void cleanup_config_connection(int index) {
     if (index < 0 || index >= s_num_active_sessions) return;
-    close(s_sessions[index].fd);
+
+    ClientSession* session = &s_sessions[index];
+
+    if (session->type == CONN_TYPE_SET && session->channel_index >= 0) {
+        semTake(g_config_mutex, WAIT_FOREVER);
+        g_system_config.channels[session->channel_index].cmd_net_info.state = NET_STATE_LISTENING;
+        g_system_config.channels[session->channel_index].cmd_net_info.client_fd = -1;
+        semGive(g_config_mutex);
+    }
+
+    close(session->fd);
+
     int last_index = s_num_active_sessions - 1;
     if (index != last_index) {
         s_sessions[index] = s_sessions[last_index];

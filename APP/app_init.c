@@ -11,12 +11,15 @@
  */
 
 #include "./inc/app_com.h"
+#include "./inc/app_udp_search.h"
 
 /* ------------------ Task Configuration Constants ------------------ */
 // 任务优先级 (数字越小，优先级越高)
 #define REALTIME_SCHEDULER_PRIORITY   50
-#define CONFIG_TASK_MANAGER_PRIORITY  80
-#define CONN_MANAGER_PRIORITY         90
+#define CONFIG_TASK_MANAGER_PRIORITY  60
+#define CONN_MANAGER_PRIORITY         70
+#define UDP_SEARCH_PRIORITY           80
+
 
 // 任务栈大小
 #define DEFAULT_STACK_SIZE            (32 * 1024) // 16KB
@@ -33,6 +36,7 @@ SEM_ID g_config_mutex;
 TASK_ID g_conn_manager_tid;
 TASK_ID g_realtime_scheduler_tid;
 TASK_ID g_config_task_manager_tid;
+TASK_ID g_udp_search_tid;
 /**
  * @brief 应用程序的主入口函数
  * @details 在VxWorks启动脚本中，通常会调用这个函数来启动整个应用。
@@ -107,9 +111,14 @@ void app_start(void) {
                                          0, DEFAULT_STACK_SIZE,
                                          (FUNCPTR)RealTimeSchedulerTask,
                                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    g_udp_search_tid = taskSpawn("tUdpSearch",
+                                 UDP_SEARCH_PRIORITY,
+                                 0, DEFAULT_STACK_SIZE,
+                                 (FUNCPTR)UdpSearchTask,
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
 	if (g_conn_manager_tid == ERROR || g_config_task_manager_tid == ERROR
-			|| g_realtime_scheduler_tid == ERROR) {
+			|| g_realtime_scheduler_tid == ERROR || g_udp_search_tid == ERROR) {
 		LOG_ERROR("FATAL: Failed to spawn one or more tasks.\n");
 		// 此处可能需要清理已创建的资源
 		return;

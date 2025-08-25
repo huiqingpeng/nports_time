@@ -17,6 +17,48 @@
 
 
 /* ------------------ Global Configuration Structures ------------------ */
+/**
+ * @brief 描述物理串口硬件的状态机
+ * @details 这个状态机追踪物理硬件的生命周期。
+ */
+typedef enum {
+    UART_STATE_CLOSED,      // 初始状态。串口未被HAL层初始化或已关闭。
+    UART_STATE_OPENED,      // 正常工作状态。串口已由HAL层成功打开并配置。
+    UART_STATE_ERROR        // 异常状态。HAL层在尝试打开或配置串口时发生硬件错误。
+                            // 这是一个持久性故障，可能需要重启或干预才能恢复。
+} UartPhysicalState;
+
+/**
+ * @brief 描述网络通道（数据和命令）的状态机
+ * @details 这个状态机追踪每个网络服务（如数据端口950）的生命周期。
+ */
+typedef enum {
+    NET_STATE_IDLE,         // 初始状态。任务尚未开始监听此端口。
+    NET_STATE_LISTENING,    // 正常状态。监听Socket已成功创建并正在等待连接。此时没有活跃的客户端。
+    NET_STATE_CONNECTED,    // 正常状态。至少有一个客户端已连接，正在进行数据交换。
+    NET_STATE_ERROR         // 异常状态。创建监听Socket失败 (例如，端口被占用)。
+                            // 这是一个持久性故障，该通道的网络服务将不可用。
+} NetworkChannelState;
+
+
+/* --- NEW: Sub-structures for better organization --- */
+
+/**
+ * @brief 描述数据通道的网络状态和连接信息
+ */
+typedef struct {
+    NetworkChannelState state;
+    int                 client_fds[MAX_CLIENTS_PER_CHANNEL];
+    int                 num_clients;
+} DataChannelInfo;
+
+/**
+ * @brief 描述命令通道的网络状态和连接信息
+ */
+typedef struct {
+    NetworkChannelState state;
+    int                 client_fd;
+} CmdChannelInfo;
 
 /**
  * @brief 全局设备配置结构体
@@ -55,6 +97,11 @@ typedef struct {
  * @brief 每个通道（串口）的状态和数据结构
  */
 typedef struct {
+    /* -- 运行时状态 -- */
+	UartPhysicalState   uart_state;       
+    DataChannelInfo     data_net_info;
+    CmdChannelInfo      cmd_net_info;
+
     /* -- Serial Settings -- */
     char alias[MAX_ALIAS_LEN];
     /* -- 配置参数 -- */
@@ -91,8 +138,8 @@ typedef struct {
 
     /* -- 运行时状态 -- */
     int data_client_fds[MAX_CLIENTS_PER_CHANNEL];
+    int cmd_client_fd;
     int num_data_clients;
-
 } ChannelState;
 
 
@@ -107,8 +154,6 @@ typedef struct {
 
 /* ------------------ Global Variable Declaration (extern) ------------------ */
 
-// 单一的全局配置变量
-extern SystemConfiguration g_system_config;
 
 
 /* ------------------ Public API Functions ------------------ */
