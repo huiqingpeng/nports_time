@@ -18,6 +18,8 @@
 
 // 准备回复内容
 static  char response_msg[512];
+
+int optval = 1; // 用于 setsockopt 的选项值
 /* ------------------ Global Variable Definitions ------------------ */
 
 void UdpSearchTask(void)
@@ -32,6 +34,12 @@ void UdpSearchTask(void)
     // 1. 创建 UDP socket
     if ((sock_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         LOG_FATAL("UdpSearchTask: socket() failed: %s", strerror(errno));
+        return;
+    }
+
+    if (setsockopt(sock_fd, SOL_SOCKET, SO_BROADCAST, (char *)&optval, sizeof(optval)) < 0) {
+        LOG_FATAL("UdpSearchTask: setsockopt(SO_BROADCAST) failed: %s", strerror(errno));
+        close(sock_fd);
         return;
     }
 
