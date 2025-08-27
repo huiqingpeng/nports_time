@@ -82,7 +82,7 @@ void app_start(void) {
 		g_system_config.channels[i].parity = 'N';
 		for(j=0;j<MAX_CLIENTS_PER_CHANNEL;j++)
 		{
-			g_system_config.channels[i].data_client_fds[j] = -1;	
+			g_system_config.channels[i].data_net_info.client_fds[j] = -1;	
 		}
 
 		// 初始化环形缓冲区

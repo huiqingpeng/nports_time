@@ -87,17 +87,39 @@ void RealTimeSchedulerTask(void) {
 
 /**
  * @brief 执行所有高频（每个周期）任务
+ * @details 负责在环形缓冲区和串口硬件FIFO之间高速交换数据。
  */
-static void run_high_frequency_tasks(void) {
-	int i;
-	for (i = 0; i < NUM_PORTS; i++) {
-		// TODO: 从串口硬件FIFO读取数据到 g_system_config.channels[i].buffer_uart
+static void run_high_frequency_tasks(void)
+{
+    int i;
+    unsigned char temp_buffer[256]; // 使用一个较小的临时缓冲区进行数据交换
+    uint32_t bytes_count;
 
-	}
+    // --- 数据方向: 串口 -> 网络环形缓冲区 ---
+    for (i = 0; i < NUM_PORTS; i++) {
+        // 从串口硬件非阻塞地读取数据
+        axi16550Recv(i, temp_buffer, &bytes_count);
+        if (bytes_count > 0) {
+            // 将读取到的数据放入“串口到网络”的环形缓冲区
+            ring_buffer_queue_arr(&g_system_config.channels[i].buffer_uart, (const char*)temp_buffer, bytes_count);
+        }
+    }
 
-	for (i = 0; i < NUM_PORTS; i++) {
-		// TODO: 从 g_system_config.channels[i].buffer_net 读取数据写入到串口硬件FIFO
-	}
+    // --- 数据方向: 网络环形缓冲区 -> 串口 ---
+    for (i = 0; i < NUM_PORTS; i++) {
+        // 检查“网络到串口”缓冲区中是否有数据
+        if (!ring_buffer_is_empty(&g_system_config.channels[i].buffer_net)) {
+            // 检查串口硬件是否准备好接收数据
+            if (axi16550_TxReady(i)) {
+                // 从环形缓冲区中取出数据
+                bytes_count = ring_buffer_dequeue_arr(&g_system_config.channels[i].buffer_net, (char*)temp_buffer, sizeof(temp_buffer));
+                if (bytes_count > 0) {
+                    // 将数据写入串口硬件
+                    axi16550SendNoWait(i, temp_buffer, bytes_count);
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -144,72 +166,74 @@ static void check_for_new_connections(void) {
 
 /**
  * @brief 对所有活跃的数据通道执行非阻塞recv
+ * @details 从TCP客户端接收数据，并放入“网络到串口”的环形缓冲区。
  */
 static void run_net_recv(void) {
-	unsigned char temp_buffer[2048];
-	int i, j;
-	for (i = 0; i < NUM_PORTS; i++) {
-		// MODIFIED: Loop through all clients for this channel
-		// 从后往前遍历，方便安全地移除断开的连接
+    unsigned char temp_buffer[2048];
+    int i, j;
 
-		for (j = g_system_config.channels[i].num_data_clients - 1; j >= 0; j--) {
-			int fd = g_system_config.channels[i].data_client_fds[j];
-			if (fd < 0)
-				continue;
+    for (i = 0; i < NUM_PORTS; i++) {
+        ChannelState* channel = &g_system_config.channels[i];
+        
+        // 从后往前遍历，方便在循环中安全地移除断开的连接
+        for (j = channel->data_net_info.num_clients - 1; j >= 0; j--) {
+            int fd = channel->data_net_info.client_fds[j];
+            if (fd < 0) continue;
 
-			int n = recv(fd, (char*) temp_buffer, sizeof(temp_buffer), 0);
-			if (n > 0) {
-				// 将收到的数据写入该通道的公共网络缓冲区
-//                ring_buffer_write_bytes(&g_system_config.channels[i].buffer_net, temp_buffer, n);
-				temp_buffer[n] = '\0';
-				LOG_INFO("[ch%d][%d] %d : %s \r\n", i, j, n, temp_buffer);
-			} else if (n == 0) {
-				cleanup_data_connection(i, j);
-			} else {
-				if (errno != EWOULDBLOCK && errno != EAGAIN) {
-					cleanup_data_connection(i, j);
-				}
-			}
-		}
-	}
+            int n = recv(fd, (char*)temp_buffer, sizeof(temp_buffer), 0);
+            
+            if (n > 0) {
+                // *** 核心逻辑: 将收到的数据写入该通道的“网络到串口”环形缓冲区 ***
+                ring_buffer_queue_arr(&channel->buffer_net, (const char*)temp_buffer, n);
+            } else if (n == 0) {
+                // 客户端正常关闭连接
+                cleanup_data_connection(i, j);
+            } else { // n < 0
+                // 检查是否是真正的错误，而不是暂无数据
+                if (errno != EWOULDBLOCK && errno != EAGAIN) {
+                    // 客户端异常断开
+                    cleanup_data_connection(i, j);
+                }
+            }
+        }
+    }
 }
 
 /**
  * @brief 对所有活跃的数据通道执行非阻塞send
+ * @details 从“串口到网络”的环形缓冲区读取数据，并发送给所有连接的客户端。
  */
 static void run_net_send(void) {
-	unsigned char temp_buffer[2048];
-	int i, j;
-	temp_buffer[0] = '1';
-	temp_buffer[1] = '\0';
-	for (i = 0; i < NUM_PORTS; i++) {
-		if (g_system_config.channels[i].num_data_clients == 0)
-			continue;
+    unsigned char temp_buffer[2048];
+    int i, j;
 
-		unsigned int bytes_to_send = 2;
-// bytes_to_send= ring_buffer_bytes_used(&g_system_config.channels[i].buffer_uart);
-		if (bytes_to_send == 0)
-			continue;
+    for (i = 0; i < NUM_PORTS; i++) {
+        ChannelState* channel = &g_system_config.channels[i];
 
-		if (bytes_to_send > sizeof(temp_buffer)) {
-			bytes_to_send = sizeof(temp_buffer);
-		}
+        // 如果该通道没有客户端连接，或者缓冲区没数据，则跳过
+        if (channel->data_net_info.num_clients == 0 || ring_buffer_is_empty(&channel->buffer_uart)) {
+            continue;
+        }
 
-		// 从串口缓冲区读取数据
-//        ring_buffer_read_bytes(&g_system_config.channels[i].buffer_uart, temp_buffer, bytes_to_send);
+        // *** 核心逻辑: 从“串口到网络”的环形缓冲区读取所有可用数据 ***
+        unsigned int bytes_to_send = ring_buffer_dequeue_arr(&channel->buffer_uart, (char*)temp_buffer, sizeof(temp_buffer));
 
-		// MODIFIED: "Fan-out" data to all clients for this channel
-		for (j = g_system_config.channels[i].num_data_clients - 1; j >= 0; j--) {
-			int fd = g_system_config.channels[i].data_client_fds[j];
+        if (bytes_to_send > 0) {
+            // 将数据“扇出”(Fan-out)到该通道的所有客户端
+            for (j = channel->data_net_info.num_clients - 1; j >= 0; j--) {
+                int fd = channel->data_net_info.client_fds[j];
+                if (fd < 0) continue;
 
-			int sent = send(fd, (char*) temp_buffer, bytes_to_send, 0);
-			if (sent < 0) {
-				if (errno != EWOULDBLOCK && errno != EAGAIN) {
-					cleanup_data_connection(i, j);
-				}
-			}
-		}
-	}
+                int sent = send(fd, (char*)temp_buffer, bytes_to_send, 0);
+                if (sent < 0) {
+                    if (errno != EWOULDBLOCK && errno != EAGAIN) {
+                        // 发送失败，说明此客户端可能已断开
+                        cleanup_data_connection(i, j);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

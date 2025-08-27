@@ -13,7 +13,6 @@
 #define MAX_MODEL_NAME_LEN          39
 #define MAX_SERVER_NAME_LEN         39
 #define MAX_PASSWORD_LEN            14
-#define MAX_SNMP_COMMUNITY_LEN      32 // 假设长度
 
 /* ------------------ Global Configuration Structures ------------------ */
 /**
@@ -55,38 +54,51 @@ typedef struct {
  */
 typedef struct {
 	NetworkChannelState state;
-	int client_fd;
+	int client_fds[MAX_CLIENTS_PER_CHANNEL];
+	int num_clients;
 } CmdChannelInfo;
 
 /**
  * @brief 全局设备配置结构体
  */
 typedef struct {
-	/* -- Overview (0x01) -- */
-	char model_name[MAX_MODEL_NAME_LEN + 1];
-	unsigned char mac_address[6];
-	unsigned short serial_no;
-	unsigned char firmware_version[3];
-	unsigned char hardware_version[3];
-	unsigned char lcm_present;
+    /* -- Overview (0x01) -- */
+    char model_name[MAX_MODEL_NAME_LEN + 1];
+    unsigned char mac_address[6];
+    unsigned short serial_no;
+    unsigned char firmware_version[3];
+    unsigned char hardware_version[3];
+    unsigned char lcm_present;
 
-	/* -- Basic Settings (0x02) -- */
-	char server_name[MAX_SERVER_NAME_LEN + 1];
-	char password[MAX_PASSWORD_LEN + 1];
-	unsigned char web_console_enabled;
-	unsigned char telnet_console_enabled;
-	unsigned char lcm_password_protected;
-	unsigned char reset_button_protected;
-	// TODO: 添加时区、时间服务器等字段
+    /* -- Basic Settings (0x02) -- */
+    char server_name[MAX_SERVER_NAME_LEN + 1];
+    unsigned char web_console_enabled;
+    unsigned char telnet_console_enabled;
+    unsigned char lcm_password_protected;
+    unsigned char reset_button_protected;
+    
+    /* -- Time Settings (from 0x02) -- */
+    unsigned char time_zone;
+    unsigned char local_time[6]; // Year, Month, Day, Hour, Minute, Second
+    unsigned int  time_server;   // Time Server IP Address
 
-	/* -- Network Settings (0x03) -- */
-	unsigned int ip_address;
-	unsigned int netmask;
-	unsigned int gateway;
-	unsigned char ip_config_mode; // 0=Static, 1=DHCP, etc.
-	unsigned int dns_server1;
-	unsigned int dns_server2;
-	// TODO: 添加SNMP和IP上报相关字段
+    /* -- Network Settings (0x03) -- */
+    unsigned int ip_address;
+    unsigned int netmask;
+    unsigned int gateway;
+    unsigned char ip_config_mode; // 0=Static, 1=DHCP, etc.
+    unsigned int dns_server1;
+    unsigned int dns_server2;
+    
+    /* -- SNMP and IP Report Settings (from 0x03) -- */
+    unsigned char  snmp_enabled;
+    unsigned int   auto_report_ip;
+    unsigned short auto_report_udp_port;
+    unsigned short auto_report_period;
+
+    /* -- Login/Admin Settings (0x07) -- */
+    char user_name[MAX_PASSWORD_LEN + 1];
+    char password[MAX_PASSWORD_LEN + 1];
 
 } DeviceSettings;
 
@@ -94,48 +106,54 @@ typedef struct {
  * @brief 每个通道（串口）的状态和数据结构
  */
 typedef struct {
-	/* -- 运行时状态 -- */
-	UartPhysicalState uart_state;
-	DataChannelInfo data_net_info;
-	CmdChannelInfo cmd_net_info;
+    /* -- 运行时状态 -- */
+	UartPhysicalState   uart_state;       
+    DataChannelInfo     data_net_info;
+    CmdChannelInfo      cmd_net_info;
 
-	/* -- Serial Settings -- */
-	char alias[MAX_ALIAS_LEN];
-	/* -- 配置参数 -- */
-	int baudrate;
-	unsigned char data_bits;
-	unsigned char stop_bits;
-	unsigned char parity;
-	unsigned char flow_ctrl;
-	unsigned char space;
-	unsigned char mark;
+    /* -- Serial Settings (0x04) -- */
+    char alias[MAX_ALIAS_LEN + 1];
+    int baudrate;
+    unsigned char data_bits;
+    unsigned char stop_bits;
+    unsigned char parity;
+    unsigned char flow_ctrl;
+    unsigned char fifo_enable;
+    unsigned char interface_type;
+    
+    /* -- 串口控制参数 (来自旧协议，但监控协议仍在使用) -- */
+    unsigned char space;
+    unsigned char mark;
 	unsigned char usart_mcr_dtr;
 	unsigned char usart_mcr_rts;
 	unsigned char usart_crtscts;
 	unsigned char IX_on;
 	unsigned char IX_off; //XonXoff
 
-	unsigned char fifo_enable;
-	unsigned char interface_type;
-
-	/* -- Operating Settings -- */
-	unsigned char op_mode;
+    /* -- Operating Settings -- */
+    unsigned char op_mode;
 	unsigned char tcp_alive_check_time_min;
 	unsigned char max_connections;
-	unsigned short local_tcp_port;
+    unsigned short local_tcp_port;
+    unsigned int op_mode_ip1;
+    unsigned int op_mode_ip2;
+    unsigned int op_mode_ip3;
+    unsigned int op_mode_ip4;
 
-	/* -- 实时数据缓冲区 -- */
-	ring_buffer_t buffer_net;      // 网络 -> 串口 的数据缓冲区
-	ring_buffer_t buffer_uart;     // 串口 -> 网络 的数据缓冲区
+    /* -- 实时数据缓冲区 -- */
+    ring_buffer_t buffer_net;
+    ring_buffer_t buffer_uart;
+    unsigned char net_buffer_mem[RING_BUFFER_SIZE];
+    unsigned char uart_buffer_mem[RING_BUFFER_SIZE];
 
-	/* -- 缓冲区物理内存 -- */
-	unsigned char net_buffer_mem[RING_BUFFER_SIZE];
-	unsigned char uart_buffer_mem[RING_BUFFER_SIZE];
-
-	/* -- 运行时状态 -- */
-	int data_client_fds[MAX_CLIENTS_PER_CHANNEL];
-	int cmd_client_fd;
-	int num_data_clients;
+    /* -- 运行时监控统计 (0x06) -- */
+    unsigned int tx_count;
+    unsigned int rx_count;
+    unsigned long long tx_total_count;
+    unsigned long long rx_total_count;
+    unsigned char dsr_status;
+    unsigned char cts_status;
+    unsigned char dcd_status;
 } ChannelState;
 
 /**

@@ -16,6 +16,11 @@
 // 内部宏定义
 #define INACTIVITY_TIMEOUT_SECONDS 300 // 5分钟无活动则超时
 #define MAX_COMMAND_LEN 1024
+#define HEAD_ID_B1 0xA5
+#define HEAD_ID_B2 0xA5
+#define END_ID_B1 0x5A
+#define END_ID_B2 0x5A
+#define MIN_FRAME_SIZE 6 // Head(2) + Cmd(1) + Sub(1) + End(2)
 
 // 内部会话管理结构体
 typedef struct {
@@ -23,7 +28,7 @@ typedef struct {
     ConnectionType type;
     int channel_index;
     time_t last_activity_time;
-    // 添加一个接收缓冲区来处理不完整的TCP数据包
+    // 接收缓冲区，用于处理不完整的TCP数据包
     unsigned char rx_buffer[MAX_COMMAND_LEN];
     int rx_bytes;
 } ClientSession;
@@ -39,9 +44,11 @@ static void handle_basic_settings_request(int session_index, const unsigned char
 static void handle_network_settings_request(int session_index, const unsigned char* frame, int len);
 static void handle_serial_settings_request(int session_index, const unsigned char* frame, int len);
 static void handle_change_password_request(int session_index, const unsigned char* frame, int len);
+static void handle_monitor_request(int session_index, const unsigned char* frame, int len);
 
 static void send_response(int fd, const unsigned char* data, int len);
-static void send_simple_ack(int fd, unsigned char cmd_id, unsigned char sub_id, int port_num, int success);
+static void send_framed_ack(int fd, unsigned char cmd_id, unsigned char sub_id, int success);
+static int pack_serial_settings(int channel_index, unsigned char* buffer);
 
 /* ------------------ Module-level static variables ------------------ */
 static ClientSession s_sessions[MAX_CONFIG_CLIENTS];
@@ -81,10 +88,29 @@ void ConfigTaskManager(void)
                 s_sessions[new_index].rx_bytes = 0;
                 s_num_active_sessions++;
                 if (msg.type == CONN_TYPE_SET && msg.channel_index >= 0) {
+                    int i = msg.channel_index;
+                    ChannelState* channel = &g_system_config.channels[i];
+
                     semTake(g_config_mutex, WAIT_FOREVER);
-                    g_system_config.channels[msg.channel_index].cmd_net_info.state = NET_STATE_CONNECTED;
-                    // 同时保存fd，便于双向查找
-                    g_system_config.channels[msg.channel_index].cmd_net_info.client_fd = msg.client_fd;
+                    if (channel->cmd_net_info.num_clients < MAX_CLIENTS_PER_CHANNEL) {
+                        int client_idx = channel->cmd_net_info.num_clients;
+                        channel->cmd_net_info.client_fds[client_idx] = msg.client_fd;
+                        
+                        if (channel->cmd_net_info.num_clients == 0) {
+                            // 第一个客户端连接，状态从 LISTENING 变为 CONNECTED
+                            channel->cmd_net_info.state = NET_STATE_CONNECTED;
+                        }
+                        channel->cmd_net_info.num_clients++;
+                        
+                        LOG_INFO("ConfigTask: Ch %d accepted new CMD client fd=%d. Total CMD clients for this port: %d\n", i, msg.client_fd, channel->cmd_net_info.num_clients);
+
+                    } else {
+                        // 如果此通道的命令连接已满，则拒绝
+                        LOG_ERROR("ConfigTask: Ch %d CMD client limit reached. Rejecting fd=%d\n", i, msg.client_fd);
+                        close(msg.client_fd);
+                        // 因为连接被拒绝，所以不将会话加入 s_sessions 列表
+                        s_num_active_sessions--; 
+                    }
                     semGive(g_config_mutex);
                 }
                 LOG_INFO("ConfigTask: Accepted new config connection fd=%d\n", msg.client_fd);
@@ -144,8 +170,9 @@ void ConfigTaskManager(void)
         }
     }
 }
+
 /**
- * @brief 处理数据接收，并尝试从字节流中解析出完整的命令帧
+ * @brief 处理数据接收，并从字节流中解析出完整的协议帧
  * @return 1 表示连接存活, 0 表示连接断开
  */
 static int handle_config_client(int index) {
@@ -158,29 +185,61 @@ static int handle_config_client(int index) {
     if (n > 0) {
         session->rx_bytes += n;
 
-        // TODO: 协议的帧结构需要明确。这里假设一个简单的帧结构:
-        // [Command_ID (1 byte)][Sub_ID (1 byte)][Length (2 bytes)][Data...]
-        // 您需要根据实际的协议文档来调整这里的帧解析逻辑。
-        while (session->rx_bytes >= 4) { // 至少包含一个完整的帧头
-            unsigned short frame_len = (session->rx_buffer[2] << 8) | session->rx_buffer[3];
-            if (session->rx_bytes >= frame_len + 4) {
-                // 我们有一个完整的帧
-                process_command_frame(index, session->rx_buffer, frame_len + 4);
+        // 循环处理缓冲区中的数据，直到找不到完整的帧
+        while (session->rx_bytes >= MIN_FRAME_SIZE) {
+            int frame_start = -1;
+            int frame_end = -1;
+            int i;
+
+            // 1. 寻找帧头 (0xA5A5)
+            for (i = 0; i <= session->rx_bytes - 2; i++) {
+                if (session->rx_buffer[i] == HEAD_ID_B1 && session->rx_buffer[i+1] == HEAD_ID_B2) {
+                    frame_start = i;
+                    break;
+                }
+            }
+
+            if (frame_start == -1) {
+                // 缓冲区中没有帧头，所有数据都可能是无效的，但为了安全，只丢弃部分
+                // 这样可以防止因丢失一个字节而丢弃整个缓冲区
+                session->rx_bytes = 0; // 或者更保守地 memmove
+                break; 
+            }
+
+            // 如果帧头不在缓冲区开头，丢弃之前的所有垃圾数据
+            if (frame_start > 0) {
+                memmove(session->rx_buffer, session->rx_buffer + frame_start, session->rx_bytes - frame_start);
+                session->rx_bytes -= frame_start;
+            }
+
+            // 2. 在找到帧头后，寻找帧尾 (0x5A5A)
+            // 帧尾至少在帧头后4个字节 (Cmd+Sub+End)
+            if (session->rx_bytes >= MIN_FRAME_SIZE) {
+                for (i = MIN_FRAME_SIZE - 2; i <= session->rx_bytes - 2; i++) {
+                    if (session->rx_buffer[i] == END_ID_B1 && session->rx_buffer[i+1] == END_ID_B2) {
+                        frame_end = i;
+                        break;
+                    }
+                }
+            }
+
+            if (frame_end != -1) {
+                // 找到了一个完整的帧
+                int frame_len = frame_end + 2;
+                process_command_frame(index, session->rx_buffer, frame_len);
                 
                 // 从缓冲区中移除已处理的帧
-                int remaining_bytes = session->rx_bytes - (frame_len + 4);
-                if (remaining_bytes > 0) {
-                    memmove(session->rx_buffer, session->rx_buffer + frame_len + 4, remaining_bytes);
-                }
-                session->rx_bytes = remaining_bytes;
+                memmove(session->rx_buffer, session->rx_buffer + frame_len, session->rx_bytes - frame_len);
+                session->rx_bytes -= frame_len;
             } else {
-                break; // 数据包不完整，等待下一次recv
+                // 只有帧头没有帧尾，说明数据包不完整，等待下一次recv
+                break;
             }
         }
-        return 1;
+        return 1; // 连接保持
     } else if (n == 0) {
         return 0; // 对方正常关闭
-    } else {
+    } else { // n < 0
         return (errno == EWOULDBLOCK || errno == EAGAIN) ? 1 : 0;
     }
 }
@@ -195,6 +254,7 @@ static void process_command_frame(int session_index, const unsigned char* frame,
         case 0x02: handle_basic_settings_request(session_index, frame, len); break;
         case 0x03: handle_network_settings_request(session_index, frame, len); break;
         case 0x04: handle_serial_settings_request(session_index, frame, len); break;
+        case 0x06: handle_monitor_request(session_index, frame, len); break;
         case 0x07: handle_change_password_request(session_index, frame, len); break;
         default:
             LOG_WARN("ConfigTask: Received unknown command ID 0x%02X\n", command_id);
@@ -202,131 +262,824 @@ static void process_command_frame(int session_index, const unsigned char* frame,
     }
 }
 
+/**
+ * @brief 发送一个带协议帧的简单ACK响应
+ * @param fd      客户端socket
+ * @param cmd_id  主命令ID
+ * @param sub_id  子命令ID
+ * @param success 成功(1)或失败(0)
+ */
+static void send_framed_ack(int fd, unsigned char cmd_id, unsigned char sub_id, int success)
+{
+    unsigned char response[7];
+    int offset = 0;
+
+    // 帧头
+    response[offset++] = 0xA5;
+    response[offset++] = 0xA5;
+
+    // 功能码
+    response[offset++] = cmd_id;
+    response[offset++] = sub_id;
+
+    // 数据 (ACK)
+    response[offset++] = success ? 0x01 : 0x00;
+
+    // 帧尾
+    response[offset++] = 0x5A;
+    response[offset++] = 0x5A;
+
+    send_response(fd, response, offset);
+}
 
 /**
- * @brief 处理 0x01 - 概述信息请求
+ * @brief 处理 0x01 - 概述信息请求 (新协议)
+ * @details 根据新的帧协议规范 (Head ID + Data + End ID)，
+ * 构建并发送包含设备概述信息的响应包。
  */
-static void handle_overview_request(int session_index) {
-    unsigned char response[128];
-    int offset = 4;
+static void handle_overview_request(int session_index)
+{
+    // 响应包缓冲区，256字节足够存放所有信息
+    unsigned char response[256]; 
+    int offset = 0;
+    size_t model_name_len;
+
+    // --- 1. 填充帧头 (Head ID: 0xA5A5) ---
+    response[offset++] = 0xA5;
+    response[offset++] = 0xA5;
+
+    // --- 2. 填充功能码 (Command_ID: 0x01, Sub_ID: 0x01) ---
+    response[offset++] = 0x01; // Command_ID for Overview
+    response[offset++] = 0x01; // Sub_ID for Read/Response
+
+    // --- 3. 填充数据负载 (Data Payload) ---
     semTake(g_config_mutex, WAIT_FOREVER);
-    // --- 临界区开始 ---
-    response[offset] = (unsigned char)strlen(g_system_config.device.model_name);
-    strncpy((char*)&response[offset + 1], g_system_config.device.model_name, MAX_MODEL_NAME_LEN);
-    offset += (1 + MAX_MODEL_NAME_LEN);
+    
+    // 3.1 Model Name (1 byte length + N bytes data)
+    model_name_len = strlen(g_system_config.device.model_name);
+    if (model_name_len > MAX_MODEL_NAME_LEN) {
+        model_name_len = MAX_MODEL_NAME_LEN;
+    }
+    response[offset++] = (unsigned char)model_name_len;
+    memcpy(&response[offset], g_system_config.device.model_name, model_name_len);
+    offset += model_name_len;
+
+    // 3.2 MAC Address (6 bytes)
     memcpy(&response[offset], g_system_config.device.mac_address, 6);
     offset += 6;
+
+    // 3.3 Serial No (2 bytes, network byte order)
     *(unsigned short*)&response[offset] = htons(g_system_config.device.serial_no);
     offset += 2;
+
+    // 3.4 Firmware Version (3 bytes)
     memcpy(&response[offset], g_system_config.device.firmware_version, 3);
     offset += 3;
-    // Hardware Version (3 bytes)
+
+    // 3.5 Hardware Version (3 bytes)
     memcpy(&response[offset], g_system_config.device.hardware_version, 3);
     offset += 3;
-    // --- 临界区结束 ---
-    semGive(g_config_mutex);
     
-    unsigned int uptime_sec = sysClkRateGet() > 0 ? tickGet() / sysClkRateGet() : 0;
-    response[offset++] = (uptime_sec / 86400);
-    response[offset++] = (uptime_sec % 86400) / 3600;
-    response[offset++] = (uptime_sec % 3600) / 60;
-    response[offset++] = (uptime_sec % 60);
+    // 3.7 LCM (1 byte)
     response[offset++] = g_system_config.device.lcm_present;
 
-    unsigned short len = offset - 4;
-    response[0] = 0x01; response[1] = 0x01;
-    response[2] = (len >> 8) & 0xFF; response[3] = len & 0xFF;
-    send_response(s_sessions[session_index].fd, response, offset);
-}
-
-static void handle_basic_settings_request(int session_index, const unsigned char* frame, int len) {
-    // TODO: 实现对 Basic Settings 的读/写操作
-    // 记得使用互斥锁
-    send_simple_ack(s_sessions[session_index].fd, frame[0], frame[1], 0, 1);
-}
-
-static void handle_network_settings_request(int session_index, const unsigned char* frame, int len) {
-    // TODO: 实现对 Network Settings 的读/写操作
-    // 记得使用互斥锁
-    send_simple_ack(s_sessions[session_index].fd, frame[0], frame[1], 0, 1);
-}
-
-static void handle_serial_settings_request(int session_index, const unsigned char* frame, int len) {
-    ClientSession* session = &s_sessions[session_index];
-    if (session->type != CONN_TYPE_SET || session->channel_index < 0) {
-        send_simple_ack(session->fd, frame[0], frame[1], 0, 0);
-        return;
-    }
-    int channel = session->channel_index;
-    unsigned char sub_id = frame[1];
-
-    if (sub_id == 0x01) { // Read Request
-        unsigned char response[128];
-        int offset = 4;
-        semTake(g_config_mutex, WAIT_FOREVER);
-        ChannelState* ch_state = &g_system_config.channels[channel];
-        response[offset++] = (unsigned char)(channel + 1);
-        response[offset] = (unsigned char)strlen(ch_state->alias);
-        strncpy((char*)&response[offset + 1], ch_state->alias, MAX_ALIAS_LEN);
-        offset += (1 + MAX_ALIAS_LEN);
-        *(unsigned int*)&response[offset] = htonl(ch_state->baudrate);
-        offset += 4;
-        response[offset++] = ch_state->data_bits;
-        response[offset++] = ch_state->stop_bits;
-        response[offset++] = ch_state->parity;
-        response[offset++] = ch_state->fifo_enable;
-        response[offset++] = ch_state->flow_ctrl;
-        response[offset++] = ch_state->interface_type;
-        semGive(g_config_mutex);
-        
-        unsigned short data_len = offset - 4;
-        response[0] = 0x04; response[1] = 0x01;
-        response[2] = (data_len >> 8) & 0xFF; response[3] = data_len & 0xFF;
-        send_response(session->fd, response, offset);
-
-    } else if (sub_id == 0x02) { // Write Request
-        const unsigned char* data = frame + 4;
-        semTake(g_config_mutex, WAIT_FOREVER);
-        ChannelState* ch_state = &g_system_config.channels[channel];
-        strncpy(ch_state->alias, (const char*)&data[2], data[1]);
-        ch_state->alias[data[1]] = '\0';
-        ch_state->baudrate = ntohl(*(unsigned int*)&data[22]);
-        ch_state->data_bits = data[26];
-        ch_state->stop_bits = data[27];
-        ch_state->parity = data[28];
-        ch_state->fifo_enable = data[29];
-        ch_state->flow_ctrl = data[30];
-        ch_state->interface_type = data[31];
-        // TODO: 调用硬件驱动函数，实际应用新配置
-        semGive(g_config_mutex);
-        send_simple_ack(session->fd, frame[0], frame[1], channel + 1, 1);
-    }
-}
-
-static void handle_change_password_request(int session_index, const unsigned char* frame, int len) {
-    const unsigned char* data = frame + 4;
-    char old_pass[MAX_PASSWORD_LEN + 1];
-    char new_pass[MAX_PASSWORD_LEN + 1];
-    int success = 0;
-
-    strncpy(old_pass, (const char*)&data[1], data[0]);
-    old_pass[data[0]] = '\0';
-    
-    const unsigned char* new_pass_data = data + 1 + MAX_PASSWORD_LEN;
-    strncpy(new_pass, (const char*)&new_pass_data[1], new_pass_data[0]);
-    new_pass[new_pass_data[0]] = '\0';
-
-    semTake(g_config_mutex, WAIT_FOREVER);
-    if (strcmp(old_pass, g_system_config.device.password) == 0) {
-        strncpy(g_system_config.device.password, new_pass, MAX_PASSWORD_LEN);
-        g_system_config.device.password[MAX_PASSWORD_LEN] = '\0';
-        success = 1;
-        // TODO: 将新密码持久化存储到Flash
-    }
     semGive(g_config_mutex);
+
+    // 3.6 System Uptime (4 bytes)
+    unsigned int uptime_sec = (sysClkRateGet() > 0) ? (tickGet() / sysClkRateGet()) : 0;
+    response[offset++] = (unsigned char)(uptime_sec / 86400);        // byte1: Days
+    response[offset++] = (unsigned char)((uptime_sec % 86400) / 3600); // byte2: Hours
+    response[offset++] = (unsigned char)((uptime_sec % 3600) / 60);  // byte3: Minutes
+    response[offset++] = (unsigned char)(uptime_sec % 60);           // byte4: Seconds
+
+    // --- 4. 填充帧尾 (End ID: 0x5A5A) ---
+    response[offset++] = 0x5A;
+    response[offset++] = 0x5A;
+
+    // --- 5. 发送完整的响应包 ---
+    // 'offset' 此时包含了整个数据包的长度
+    send_response(s_sessions[session_index].fd, response, offset);
     
-    send_simple_ack(s_sessions[session_index].fd, frame[0], frame[1], 0, success);
+    LOG_INFO("ConfigTask: Sent Overview response (New Protocol). Total length: %d bytes.", offset);
 }
+
+/**
+ * @brief 处理 0x02 - 基础设置请求 (新协议分发器)
+ * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
+ */
+static void handle_basic_settings_request(int session_index, const unsigned char* frame, int len)
+{
+    // 在新协议中, Sub_ID位于第4个字节 (索引为3)
+    // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
+    unsigned char sub_id = frame[3]; 
+
+    switch (sub_id) {
+        case 0x00: // 参数读取 (设备 -> 上位机)
+            {
+                unsigned char response[256];
+                int offset = 0;
+                size_t server_name_len;
+                unsigned int time_server_ip;
+
+                // --- 1. 填充帧头和功能码 ---
+                response[offset++] = 0xA5; response[offset++] = 0xA5; // Head ID
+                response[offset++] = 0x02; response[offset++] = 0x00; // Command & Sub ID
+
+                // --- 2. 填充数据负载 ---
+                semTake(g_config_mutex, WAIT_FOREVER);
+                
+                // Server name
+                server_name_len = strlen(g_system_config.device.server_name);
+                if (server_name_len > MAX_SERVER_NAME_LEN) server_name_len = MAX_SERVER_NAME_LEN;
+                response[offset++] = (unsigned char)server_name_len;
+                memcpy(&response[offset], g_system_config.device.server_name, server_name_len);
+                offset += server_name_len;
+
+                // Time zone, Local time, Time server
+                response[offset++] = g_system_config.device.time_zone;
+                memcpy(&response[offset], g_system_config.device.local_time, 6);
+                offset += 6;
+                time_server_ip = htonl(g_system_config.device.time_server);
+                memcpy(&response[offset], &time_server_ip, 4);
+                offset += 4;
+
+                // Settings
+                response[offset++] = g_system_config.device.web_console_enabled;
+                response[offset++] = g_system_config.device.telnet_console_enabled;
+                response[offset++] = g_system_config.device.lcm_password_protected;
+                response[offset++] = g_system_config.device.reset_button_protected;
+                
+                semGive(g_config_mutex);
+
+                // --- 3. 填充帧尾 ---
+                response[offset++] = 0x5A; response[offset++] = 0x5A; // End ID
+
+                // --- 4. 发送响应包 ---
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent Basic Settings response.");
+            }
+            break;
+
+        case 0x01: // 时间设置 (上位机 -> 设备)
+            {
+                const unsigned char* data = frame + 4; // 数据部分从第4个字节之后开始
+                unsigned char server_name_len = data[0];
+
+                if (server_name_len > MAX_SERVER_NAME_LEN) {
+                    LOG_ERROR("ConfigTask: Received invalid server name length (%d).", server_name_len);
+                    send_framed_ack(s_sessions[session_index].fd, 0x02, 0x01, 0); // 0表示失败
+                    return;
+                }
+
+                semTake(g_config_mutex, WAIT_FOREVER);
+                
+                // 更新 Server name
+                strncpy(g_system_config.device.server_name, (const char*)&data[1], server_name_len);
+                g_system_config.device.server_name[server_name_len] = '\0';
+
+                const unsigned char* time_data = data + 1 + server_name_len;
+                g_system_config.device.time_zone = time_data[0];
+                memcpy(g_system_config.device.local_time, &time_data[1], 6);
+                memcpy(&g_system_config.device.time_server, &time_data[7], 4);
+                g_system_config.device.time_server = ntohl(g_system_config.device.time_server);
+
+                semGive(g_config_mutex);
+                
+                // TODO: 在这里可以添加实际设置系统时间的代码
+                
+                LOG_INFO("ConfigTask: Updated Time Settings.");
+                send_framed_ack(s_sessions[session_index].fd, 0x02, 0x01, 1); // 1表示成功
+            }
+            break;
+
+        case 0x02: // 其他开关设置 (上位机 -> 设备)
+            {
+                const unsigned char* data = frame + 4;
+
+                semTake(g_config_mutex, WAIT_FOREVER);
+                
+                g_system_config.device.web_console_enabled    = data[0];
+                g_system_config.device.telnet_console_enabled = data[1];
+                g_system_config.device.lcm_password_protected = data[2];
+                g_system_config.device.reset_button_protected = data[3];
+
+                semGive(g_config_mutex);
+
+                LOG_INFO("ConfigTask: Updated Enable/Disable Settings.");
+                send_framed_ack(s_sessions[session_index].fd, 0x02, 0x02, 1); // 1表示成功
+            }
+            break;
+
+        default:
+            LOG_WARN("ConfigTask: Received unknown Sub_ID 0x%02X for Basic Settings.", sub_id);
+            send_framed_ack(s_sessions[session_index].fd, 0x02, sub_id, 0); // 失败
+            break;
+    }
+}
+
+/**
+ * @brief 处理 0x03 - 网络设置请求 (新协议分发器)
+ * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
+ */
+static void handle_network_settings_request(int session_index, const unsigned char* frame, int len)
+{
+    // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
+    unsigned char sub_id = frame[3]; 
+
+    switch (sub_id) {
+        case 0x00: // 参数读取 (设备 -> 上位机)
+            {
+                unsigned char response[256];
+                int offset = 0;
+                unsigned int temp_ip;
+                unsigned short temp_port;
+
+                // --- 1. 填充帧头和功能码 ---
+                response[offset++] = 0xA5; response[offset++] = 0xA5; // Head ID
+                response[offset++] = 0x03; response[offset++] = 0x00; // Command & Sub ID
+
+                // --- 2. 填充数据负载 ---
+                semTake(g_config_mutex, WAIT_FOREVER);
+                
+                // IP, Netmask, Gateway (4+4+4 bytes)
+                temp_ip = htonl(g_system_config.device.ip_address);
+                memcpy(&response[offset], &temp_ip, 4);
+                offset += 4;
+                temp_ip = htonl(g_system_config.device.netmask);
+                memcpy(&response[offset], &temp_ip, 4);
+                offset += 4;
+                temp_ip = htonl(g_system_config.device.gateway);
+                memcpy(&response[offset], &temp_ip, 4);
+                offset += 4;
+
+                // IP configuration (1 byte)
+                response[offset++] = g_system_config.device.ip_config_mode;
+
+                // DNS servers (4+4 bytes)
+                temp_ip = htonl(g_system_config.device.dns_server1);
+                memcpy(&response[offset], &temp_ip, 4);
+                offset += 4;
+                temp_ip = htonl(g_system_config.device.dns_server2);
+                memcpy(&response[offset], &temp_ip, 4);
+                offset += 4;
+
+                // SNMP (1 byte)
+                response[offset++] = g_system_config.device.snmp_enabled;
+
+                // Auto report IP, port, period (4+2+2 bytes)
+                temp_ip = htonl(g_system_config.device.auto_report_ip);
+                memcpy(&response[offset], &temp_ip, 4);
+                offset += 4;
+                temp_port = htons(g_system_config.device.auto_report_udp_port);
+                memcpy(&response[offset], &temp_port, 2);
+                offset += 2;
+                temp_port = htons(g_system_config.device.auto_report_period);
+                memcpy(&response[offset], &temp_port, 2);
+                offset += 2;
+
+                semGive(g_config_mutex);
+
+                // --- 3. 填充帧尾 ---
+                response[offset++] = 0x5A; response[offset++] = 0x5A; // End ID
+
+                // --- 4. 发送响应包 ---
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent Network Settings response.");
+            }
+            break;
+
+        case 0x01: // 写入 "Network Settings"
+            {
+                const unsigned char* data = frame + 4;
+                semTake(g_config_mutex, WAIT_FOREVER);
+
+                memcpy(&g_system_config.device.ip_address, &data[0], 4);
+                g_system_config.device.ip_address = ntohl(g_system_config.device.ip_address);
+
+                memcpy(&g_system_config.device.netmask, &data[4], 4);
+                g_system_config.device.netmask = ntohl(g_system_config.device.netmask);
+                
+                memcpy(&g_system_config.device.gateway, &data[8], 4);
+                g_system_config.device.gateway = ntohl(g_system_config.device.gateway);
+
+                g_system_config.device.ip_config_mode = data[12];
+
+                memcpy(&g_system_config.device.dns_server1, &data[13], 4);
+                g_system_config.device.dns_server1 = ntohl(g_system_config.device.dns_server1);
+
+                memcpy(&g_system_config.device.dns_server2, &data[17], 4);
+                g_system_config.device.dns_server2 = ntohl(g_system_config.device.dns_server2);
+
+                semGive(g_config_mutex);
+                
+                // TODO: 在此调用实际应用网络配置的函数 (e.g., ifconfig)
+                
+                LOG_INFO("ConfigTask: Updated Network Settings.");
+                send_framed_ack(s_sessions[session_index].fd, 0x03, 0x01, 1); // 成功
+            }
+            break;
+
+        case 0x02: // 写入 "SNMP Setting"
+            {
+                const unsigned char* data = frame + 4;
+                semTake(g_config_mutex, WAIT_FOREVER);
+                g_system_config.device.snmp_enabled = data[0];
+                semGive(g_config_mutex);
+
+                LOG_INFO("ConfigTask: Updated SNMP Setting to %d.", data[0]);
+                send_framed_ack(s_sessions[session_index].fd, 0x03, 0x02, 1); // 成功
+            }
+            break;
+
+        case 0x03: // 写入 "IP Address report"
+            {
+                const unsigned char* data = frame + 4;
+                semTake(g_config_mutex, WAIT_FOREVER);
+
+                memcpy(&g_system_config.device.auto_report_ip, &data[0], 4);
+                g_system_config.device.auto_report_ip = ntohl(g_system_config.device.auto_report_ip);
+
+                memcpy(&g_system_config.device.auto_report_udp_port, &data[4], 2);
+                g_system_config.device.auto_report_udp_port = ntohs(g_system_config.device.auto_report_udp_port);
+
+                memcpy(&g_system_config.device.auto_report_period, &data[6], 2);
+                g_system_config.device.auto_report_period = ntohs(g_system_config.device.auto_report_period);
+
+                semGive(g_config_mutex);
+
+                LOG_INFO("ConfigTask: Updated IP Address Report settings.");
+                send_framed_ack(s_sessions[session_index].fd, 0x03, 0x03, 1); // 成功
+            }
+            break;
+
+        default:
+            LOG_WARN("ConfigTask: Received unknown Sub_ID 0x%02X for Network Settings.", sub_id);
+            send_framed_ack(s_sessions[session_index].fd, 0x03, sub_id, 0); // 失败
+            break;
+    }
+}
+
+/**
+ * @brief 将单个串口通道的配置打包到缓冲区
+ * @param channel_index 要打包的通道索引 (0-15)
+ * @param buffer        目标缓冲区
+ * @return int          打包的数据长度
+ */
+static int pack_serial_settings(int channel_index, unsigned char* buffer)
+{
+    int offset = 0;
+    size_t alias_len;
+    unsigned int temp_baud;
+    ChannelState* ch = &g_system_config.channels[channel_index];
+
+    // 1. Port Index (1-based)
+    buffer[offset++] = (unsigned char)(channel_index + 1);
+
+    // 2. Alias (1 byte length + N bytes data)
+    alias_len = strlen(ch->alias);
+    if (alias_len > MAX_ALIAS_LEN) alias_len = MAX_ALIAS_LEN;
+    buffer[offset++] = (unsigned char)alias_len;
+    memcpy(&buffer[offset], ch->alias, alias_len);
+    offset += alias_len;
+
+    // 3. Baud rate (4 bytes, network byte order)
+    temp_baud = htonl(ch->baudrate);
+    memcpy(&buffer[offset], &temp_baud, 4);
+    offset += 4;
+
+    // 4. Data bits, Stop bits, Parity, FIFO, Flow ctrl, Interface
+    buffer[offset++] = ch->data_bits;
+    buffer[offset++] = ch->stop_bits;
+    buffer[offset++] = ch->parity;
+    buffer[offset++] = ch->fifo_enable;
+    buffer[offset++] = ch->flow_ctrl;
+    buffer[offset++] = ch->interface_type;
+    
+    return offset;
+}
+
+/**
+ * @brief 处理 0x04 - 串口设置请求 (新协议分发器)
+ * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
+ */
+static void handle_serial_settings_request(int session_index, const unsigned char* frame, int len)
+{
+    // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
+    unsigned char sub_id = frame[3]; 
+
+    switch (sub_id) {
+        case 0x00: // 读取所有串口设置
+            {
+                // 预估最大长度: 4(head) + 1(count) + 16 * (1+1+19+4+1+1+1+1+1+1) (ports) + 2(end) approx 500 bytes
+                unsigned char response[1024]; 
+                int offset = 0;
+                int i;
+
+                // --- 1. 填充帧头和功能码 ---
+                response[offset++] = 0xA5; response[offset++] = 0xA5; // Head ID
+                response[offset++] = 0x04; response[offset++] = 0x00; // Command & Sub ID
+
+                // --- 2. 填充数据负载 ---
+                response[offset++] = NUM_PORTS; // 串口数量
+
+                semTake(g_config_mutex, WAIT_FOREVER);
+                for (i = 0; i < NUM_PORTS; i++) {
+                    offset += pack_serial_settings(i, &response[offset]);
+                }
+                semGive(g_config_mutex);
+
+                // --- 3. 填充帧尾 ---
+                response[offset++] = 0x5A; response[offset++] = 0x5A; // End ID
+
+                // --- 4. 发送响应包 ---
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent All Serial Settings response.");
+            }
+            break;
+
+        case 0x01: // 读取单个串口设置
+            {
+                const unsigned char* data = frame + 4;
+                unsigned char port_index = data[0]; // 1-based index
+
+                if (port_index < 1 || port_index > NUM_PORTS) {
+                    LOG_ERROR("ConfigTask: Invalid port index %d for read.", port_index);
+                    // 根据协议，读取失败没有明确的ACK，可以选择不回复或自定义错误
+                    return;
+                }
+                int channel_index = port_index - 1; // 0-based index
+
+                unsigned char response[256];
+                int offset = 0;
+
+                response[offset++] = 0xA5; response[offset++] = 0xA5;
+                response[offset++] = 0x04; response[offset++] = 0x01;
+                
+                semTake(g_config_mutex, WAIT_FOREVER);
+                offset += pack_serial_settings(channel_index, &response[offset]);
+                semGive(g_config_mutex);
+
+                response[offset++] = 0x5A; response[offset++] = 0x5A;
+
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent Serial Settings for Port %d.", port_index);
+            }
+            break;
+
+        case 0x02: // 写入单个串口设置
+            {
+                const unsigned char* data = frame + 4;
+                int data_offset = 0;
+                
+                unsigned char port_index = data[data_offset++];
+                
+                if (port_index < 1 || port_index > NUM_PORTS) {
+                    LOG_ERROR("ConfigTask: Invalid port index %d for write.", port_index);
+                    send_framed_ack(s_sessions[session_index].fd, 0x04, 0x02, 0); // 失败
+                    return;
+                }
+                int channel_index = port_index - 1;
+
+                semTake(g_config_mutex, WAIT_FOREVER);
+                ChannelState* ch = &g_system_config.channels[channel_index];
+
+                // Alias
+                unsigned char alias_len = data[data_offset++];
+                if (alias_len > MAX_ALIAS_LEN) alias_len = MAX_ALIAS_LEN;
+                strncpy(ch->alias, (const char*)&data[data_offset], alias_len);
+                ch->alias[alias_len] = '\0';
+                data_offset += alias_len;
+
+                // Baud, Data bits, etc.
+                memcpy(&ch->baudrate, &data[data_offset], 4);
+                ch->baudrate = ntohl(ch->baudrate);
+                data_offset += 4;
+
+                ch->data_bits = data[data_offset++];
+                ch->stop_bits = data[data_offset++];
+                ch->parity = data[data_offset++];
+                ch->fifo_enable = data[data_offset++];
+                ch->flow_ctrl = data[data_offset++];
+                ch->interface_type = data[data_offset++];
+                
+                semGive(g_config_mutex);
+
+                // TODO: 在此调用实际应用串口硬件配置的函数
+                // e.g., apply_serial_config_to_hw(channel_index);
+
+                LOG_INFO("ConfigTask: Updated Serial Settings for Port %d.", port_index);
+                send_framed_ack(s_sessions[session_index].fd, 0x04, 0x02, 1); // 成功
+            }
+            break;
+            
+        default:
+            LOG_WARN("ConfigTask: Received unknown Sub_ID 0x%02X for Serial Settings.", sub_id);
+            send_framed_ack(s_sessions[session_index].fd, 0x04, sub_id, 0); // 失败
+            break;
+    }
+}
+
+/**
+ * @brief 处理 0x06 - 监控请求 (新协议分发器)
+ * @details 根据 Sub_ID 将请求分发给不同的监控数据读取逻辑。
+ */
+static void handle_monitor_request(int session_index, const unsigned char* frame, int len)
+{
+    // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
+    unsigned char sub_id = frame[3]; 
+
+    switch (sub_id) {
+        case 0x01: // 读取 Monitor Line
+            {
+                const unsigned char* data = frame + 4;
+                unsigned char port_count = NUM_PORTS;
+                int i;
+
+                if (port_count == 0 || port_count > NUM_PORTS) {
+                     LOG_ERROR("ConfigTask: Invalid port count %d for Monitor Line.", port_count);
+                     return; // 无效请求，不回复
+                }
+
+                unsigned char response[1024];
+                int offset = 0;
+
+                // --- 1. 填充帧头和功能码 ---
+                response[offset++] = 0xA5; response[offset++] = 0xA5;
+                response[offset++] = 0x06; response[offset++] = 0x01;
+
+                // --- 2. 填充数据负载 ---
+                response[offset++] = port_count; // 回复请求的端口数量
+
+                semTake(g_config_mutex, WAIT_FOREVER);
+                for (i = 0; i < port_count; i++) {
+                    unsigned char port_index = data[1 + i]; // 1-based index
+                    if (port_index >= 1 && port_index <= NUM_PORTS) {
+                        int channel_index = port_index - 1;
+                        ChannelState* ch = &g_system_config.channels[channel_index];
+                        unsigned int temp_ip;
+
+                        response[offset++] = port_index;
+                        response[offset++] = ch->op_mode;
+                        
+                        temp_ip = htonl(ch->op_mode_ip1);
+                        memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        temp_ip = htonl(ch->op_mode_ip2);
+                        memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        temp_ip = htonl(ch->op_mode_ip3);
+                        memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        temp_ip = htonl(ch->op_mode_ip4);
+                        memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                    }
+                }
+                semGive(g_config_mutex);
+
+                // --- 3. 填充帧尾 ---
+                response[offset++] = 0x5A; response[offset++] = 0x5A;
+
+                // --- 4. 发送响应包 ---
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent Monitor Line response for %d ports.", port_count);
+            }
+            break;
+
+        case 0x02: // 读取 Monitor Async
+            {
+                const unsigned char* data = frame + 4;
+                unsigned char port_count = NUM_PORTS;
+                int i;
+
+                if (port_count == 0 || port_count > NUM_PORTS) {
+                     LOG_ERROR("ConfigTask: Invalid port count %d for Monitor Async.", port_count);
+                     return;
+                }
+
+                unsigned char response[1024];
+                int offset = 0;
+                
+                response[offset++] = 0xA5; response[offset++] = 0xA5;
+                response[offset++] = 0x06; response[offset++] = 0x02;
+                response[offset++] = port_count; // 回复请求的端口数量
+
+                semTake(g_config_mutex, WAIT_FOREVER);
+                for (i = 0; i < port_count; i++) {
+                    unsigned char port_index = data[1 + i]; // 1-based index
+                    if (port_index >= 1 && port_index <= NUM_PORTS) {
+                        int channel_index = port_index - 1;
+                        ChannelState* ch = &g_system_config.channels[channel_index];
+                        unsigned int temp_32;
+                        unsigned long long temp_64;
+
+                        response[offset++] = port_index;
+
+                        temp_32 = htonl(ch->tx_count);
+                        memcpy(&response[offset], &temp_32, 4); offset += 4;
+                        temp_32 = htonl(ch->rx_count);
+                        memcpy(&response[offset], &temp_32, 4); offset += 4;
+                        
+                        // 注意: VxWorks可能没有htobe64, 需要手动转换
+                        temp_64 = ch->tx_total_count;
+                        response[offset++] = (temp_64 >> 56) & 0xFF; response[offset++] = (temp_64 >> 48) & 0xFF;
+                        response[offset++] = (temp_64 >> 40) & 0xFF; response[offset++] = (temp_64 >> 32) & 0xFF;
+                        response[offset++] = (temp_64 >> 24) & 0xFF; response[offset++] = (temp_64 >> 16) & 0xFF;
+                        response[offset++] = (temp_64 >> 8) & 0xFF;  response[offset++] = temp_64 & 0xFF;
+
+                        temp_64 = ch->rx_total_count;
+                        response[offset++] = (temp_64 >> 56) & 0xFF; response[offset++] = (temp_64 >> 48) & 0xFF;
+                        response[offset++] = (temp_64 >> 40) & 0xFF; response[offset++] = (temp_64 >> 32) & 0xFF;
+                        response[offset++] = (temp_64 >> 24) & 0xFF; response[offset++] = (temp_64 >> 16) & 0xFF;
+                        response[offset++] = (temp_64 >> 8) & 0xFF;  response[offset++] = temp_64 & 0xFF;
+
+                        response[offset++] = ch->dsr_status;
+                        response[offset++] = ch->cts_status;
+                        response[offset++] = ch->dcd_status;
+                    }
+                }
+                semGive(g_config_mutex);
+
+                response[offset++] = 0x5A; response[offset++] = 0x5A;
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent Monitor Async response for %d ports.", port_count);
+            }
+            break;
+            
+        case 0x03: // 读取 Monitor Async-Settings
+            {
+                const unsigned char* data = frame + 4;
+                unsigned char port_count = NUM_PORTS;
+                int i;
+
+                if (port_count == 0 || port_count > NUM_PORTS) {
+                     LOG_ERROR("ConfigTask: Invalid port count %d for Monitor Settings.", port_count);
+                     return;
+                }
+
+                unsigned char response[1024];
+                int offset = 0;
+                
+                response[offset++] = 0xA5; response[offset++] = 0xA5;
+                response[offset++] = 0x06; response[offset++] = 0x03;
+                response[offset++] = port_count; // 回复请求的端口数量
+                
+                semTake(g_config_mutex, WAIT_FOREVER);
+                for (i = 0; i < port_count; i++) {
+                    unsigned char port_index = data[1 + i]; // 1-based index
+                    if (port_index >= 1 && port_index <= NUM_PORTS) {
+                        int channel_index = port_index - 1;
+                        ChannelState* ch = &g_system_config.channels[channel_index];
+                        unsigned int temp_baud;
+
+                        response[offset++] = port_index;
+
+                        temp_baud = htonl(ch->baudrate);
+                        memcpy(&response[offset], &temp_baud, 4); offset += 4;
+                        
+                        response[offset++] = ch->data_bits;
+                        response[offset++] = ch->stop_bits;
+                        response[offset++] = ch->parity;
+                        response[offset++] = ch->fifo_enable;
+                        response[offset++] = ch->usart_crtscts; // RTS/CTS
+                        response[offset++] = ch->IX_on;         // XON/XOFF
+                        response[offset++] = ch->usart_mcr_dtr; // DTR/DSR
+                    }
+                }
+                semGive(g_config_mutex);
+
+                response[offset++] = 0x5A; response[offset++] = 0x5A;
+                send_response(s_sessions[session_index].fd, response, offset);
+                LOG_INFO("ConfigTask: Sent Monitor Settings response for %d ports.", port_count);
+            }
+            break;
+
+        default:
+            LOG_WARN("ConfigTask: Received unknown Sub_ID 0x%02X for Monitor.", sub_id);
+            // 此协议没有ACK，所以未知子命令不回复
+            break;
+    }
+}
+
+
+/**
+ * @brief 处理 0x07 - 管理功能请求 (登录、改密、重启等)
+ * @details 根据 Sub_ID 将请求分发给不同的处理函数。
+ */
+static void handle_change_password_request(int session_index, const unsigned char* frame, int len)
+{
+    // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
+    unsigned char sub_id = frame[3]; 
+
+    switch (sub_id) {
+        case 0x00: // Login (登录)
+            {
+                const unsigned char* data = frame + 4;
+                unsigned char user_len = data[0];
+                char user_recv[MAX_PASSWORD_LEN + 1];
+                
+                const unsigned char* pass_data = data + 1 + user_len;
+                unsigned char pass_len = pass_data[0];
+                char pass_recv[MAX_PASSWORD_LEN + 1];
+
+                int login_ok = 0;
+
+                // 长度校验
+                if (user_len <= MAX_PASSWORD_LEN && pass_len <= MAX_PASSWORD_LEN) {
+                    // 提取接收到的用户名和密码
+                    strncpy(user_recv, (const char*)&data[1], user_len);
+                    user_recv[user_len] = '\0';
+                    strncpy(pass_recv, (const char*)&pass_data[1], pass_len);
+                    pass_recv[pass_len] = '\0';
+
+                    semTake(g_config_mutex, WAIT_FOREVER);
+                    // 比较用户名和密码
+                    if (strcmp(user_recv, g_system_config.device.user_name) == 0 &&
+                        strcmp(pass_recv, g_system_config.device.password) == 0) {
+                        login_ok = 1; // 验证成功
+                    }
+                    semGive(g_config_mutex);
+                }
+                
+                LOG_INFO("ConfigTask: Login attempt with user '%s'. Success: %d", user_recv, login_ok);
+                send_framed_ack(s_sessions[session_index].fd, 0x07, 0x00, login_ok);
+            }
+            break;
+
+        case 0x01: // Change password (修改密码)
+            {
+                const unsigned char* data = frame + 4;
+                int success = 0;
+
+                // 1. 解析旧密码
+                unsigned char old_pass_len = data[0];
+                char old_pass_recv[MAX_PASSWORD_LEN + 1];
+                const unsigned char* new_pass_data = data + 1 + old_pass_len;
+
+                // 2. 解析新密码
+                unsigned char new_pass_len = new_pass_data[0];
+                char new_pass_recv[MAX_PASSWORD_LEN + 1];
+                const unsigned char* retype_pass_data = new_pass_data + 1 + new_pass_len;
+                
+                // 3. 解析重复输入的新密码
+                unsigned char retype_pass_len = retype_pass_data[0];
+                char retype_pass_recv[MAX_PASSWORD_LEN + 1];
+
+                // 长度校验
+                if (old_pass_len <= MAX_PASSWORD_LEN && new_pass_len <= MAX_PASSWORD_LEN && retype_pass_len <= MAX_PASSWORD_LEN) {
+                    strncpy(old_pass_recv, (const char*)&data[1], old_pass_len);
+                    old_pass_recv[old_pass_len] = '\0';
+                    
+                    strncpy(new_pass_recv, (const char*)&new_pass_data[1], new_pass_len);
+                    new_pass_recv[new_pass_len] = '\0';
+
+                    strncpy(retype_pass_recv, (const char*)&retype_pass_data[1], retype_pass_len);
+                    retype_pass_recv[retype_pass_len] = '\0';
+
+                    // 逻辑校验
+                    if (strcmp(new_pass_recv, retype_pass_recv) == 0 && new_pass_len > 0) {
+                        semTake(g_config_mutex, WAIT_FOREVER);
+                        // 校验旧密码是否正确
+                        if (strcmp(old_pass_recv, g_system_config.device.password) == 0) {
+                            // 更新密码
+                            strncpy(g_system_config.device.password, new_pass_recv, MAX_PASSWORD_LEN);
+                            g_system_config.device.password[MAX_PASSWORD_LEN] = '\0';
+                            success = 1;
+                            // TODO: 调用 dev_config_save() 将新密码持久化到Flash
+                        }
+                        semGive(g_config_mutex);
+                    }
+                }
+                
+                LOG_INFO("ConfigTask: Change password attempt. Success: %d", success);
+                send_framed_ack(s_sessions[session_index].fd, 0x07, 0x01, success);
+            }
+            break;
+
+        case 0x02: // Load Factory Default (恢复出厂设置)
+            {
+                LOG_INFO("ConfigTask: Received command to load factory defaults.");
+                dev_config_load_defaults();
+                // 恢复出厂设置后，通常需要保存
+                dev_config_save();
+                // 此操作通常不回复ACK，因为设备可能直接重启
+                // 如果需要回复，可以在重启前发送
+                // send_framed_ack(s_sessions[session_index].fd, 0x07, 0x02, 1);
+            }
+            break;
+
+        case 0x03: // Save/Restart (重启)
+            {
+                LOG_INFO("ConfigTask: Received command to save and restart.");
+                dev_config_save();
+                // 此操作通常不回复ACK，因为设备将立即重启
+                dev_reboot(); 
+            }
+            break;
+
+        default:
+            LOG_WARN("ConfigTask: Received unknown Sub_ID 0x%02X for Admin functions.", sub_id);
+            send_framed_ack(s_sessions[session_index].fd, 0x07, sub_id, 0); // 失败
+            break;
+    }
+}
+
 
 /**
  * @brief 统一的发送函数
@@ -335,34 +1088,46 @@ static void send_response(int fd, const unsigned char* data, int len) {
     send(fd, (char*)data, len, 0);
 }
 
-/**
- * @brief 发送一个简单的成功/失败响应
- */
-static void send_simple_ack(int fd, unsigned char cmd_id, unsigned char sub_id, int port_num, int success) {
-    unsigned char response[6];
-    response[0] = cmd_id;
-    response[1] = sub_id;
-    response[2] = 0;
-    response[3] = 2; // Length of data (port + status)
-    response[4] = (unsigned char)port_num;
-    response[5] = success ? 0x01 : 0x00;
-    send_response(fd, response, sizeof(response));
-}
-
-static void cleanup_config_connection(int index) {
+static void cleanup_config_connection(int index) 
+{
+	int i=0;
     if (index < 0 || index >= s_num_active_sessions) return;
 
     ClientSession* session = &s_sessions[index];
+    int fd_to_close = session->fd;
 
+    // 如果是特定通道的命令连接，则更新其状态
     if (session->type == CONN_TYPE_SET && session->channel_index >= 0) {
+        int channel_index = session->channel_index;
         semTake(g_config_mutex, WAIT_FOREVER);
-        g_system_config.channels[session->channel_index].cmd_net_info.state = NET_STATE_LISTENING;
-        g_system_config.channels[session->channel_index].cmd_net_info.client_fd = -1;
+        ChannelState* channel = &g_system_config.channels[channel_index];
+        
+        // 在该通道的客户端数组中查找并移除 fd
+        int client_found = 0;
+        for (i = 0; i < channel->cmd_net_info.num_clients; i++) {
+            if (channel->cmd_net_info.client_fds[i] == fd_to_close) {
+                // 找到了，用最后一个元素覆盖当前位置
+                int last_client_index = channel->cmd_net_info.num_clients - 1;
+                channel->cmd_net_info.client_fds[i] = channel->cmd_net_info.client_fds[last_client_index];
+                channel->cmd_net_info.client_fds[last_client_index] = -1; // 清理
+                channel->cmd_net_info.num_clients--;
+                client_found = 1;
+                break;
+            }
+        }
+
+        // 如果是最后一个客户端断开，则更新状态
+        if (client_found && channel->cmd_net_info.num_clients == 0) {
+            channel->cmd_net_info.state = NET_STATE_LISTENING;
+            LOG_INFO("ConfigTask: Ch %d has no CMD clients left. State -> LISTENING.\n", channel_index);
+        }
         semGive(g_config_mutex);
     }
 
-    close(session->fd);
+    close(fd_to_close);
+    LOG_INFO("ConfigTask: Cleaned up client fd=%d.\n", fd_to_close);
 
+    // 从全局会话数组 s_sessions 中移除
     int last_index = s_num_active_sessions - 1;
     if (index != last_index) {
         s_sessions[index] = s_sessions[last_index];
