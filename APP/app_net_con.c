@@ -1,7 +1,7 @@
 #include "./inc/app_com.h"
 #include <netinet/tcp.h>
 
-#define LISTEN_BACKLOG 128*2 // 从 5 增加到 128
+#define LISTEN_BACKLOG 1024
 
 
 /* ------------------ Private Function Prototypes ------------------ */
@@ -40,10 +40,8 @@ void ConnectionManagerTask(void)
         g_port_mappings[i].data_listen_fd = setup_listening_socket(g_port_mappings[i].data_port);
         semTake(g_config_mutex, WAIT_FOREVER);
         if (g_port_mappings[i].data_listen_fd < 0) {
-            /* --- STATE UPDATE --- */
             g_system_config.channels[i].data_net_info.state = NET_STATE_ERROR;
         } else {
-            /* --- STATE UPDATE --- */
             g_system_config.channels[i].data_net_info.state = NET_STATE_LISTENING;
         }
         semGive(g_config_mutex);
@@ -113,9 +111,9 @@ void ConnectionManagerTask(void)
                     msg.client_fd = client_fd;
                     set_socket_non_blocking(client_fd);
                     set_tcp_keepalive(client_fd, 60, 5, 3);
-                    LOG_INFO("[%d ]CONN_TYPE_DATA:[%d]\r\n",i,msg.channel_index);
+                    LOG_DEBUG("[%d ]CONN_TYPE_DATA:[%d]\r\n",i,msg.channel_index);
                     if (msgQSend(g_data_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
-                        printf(stderr, "CRITICAL: Data queue full! Dropping connection for channel %d.\n", i);
+                        LOG_ERROR("CRITICAL: Data queue full! Dropping connection for channel %d.\n", i);
                         close(client_fd);
                     }
                 }
@@ -130,7 +128,7 @@ void ConnectionManagerTask(void)
                     msg.channel_index = g_port_mappings[i].channel_index;
                     msg.client_fd = client_fd;
                     set_socket_non_blocking(client_fd);
-                    LOG_INFO("[%d ]CONN_TYPE_SET:[%d]\r\n",i,msg.channel_index);
+                    LOG_DEBUG("[%d ]CONN_TYPE_SET:[%d]\r\n",i,msg.channel_index);
                     if (msgQSend(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
                         LOG_ERROR("CRITICAL: Config queue full! Dropping connection for channel %d.\n", i);
                         close(client_fd);

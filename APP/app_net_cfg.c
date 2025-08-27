@@ -70,9 +70,8 @@ void ConfigTaskManager(void)
     {
         /* ------------------ 1. 检查并接管新连接 ------------------ */
         NewConnectionMsg msg;
-        while (msgQReceive(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT) != ERROR)
+        while (msgQReceive(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT) == sizeof(NewConnectionMsg))
         {
-        	LOG_INFO("g_config_conn_q \n");
             if (s_num_active_sessions < MAX_CONFIG_CLIENTS) {
                 int new_index = s_num_active_sessions;
                 s_sessions[new_index].fd = msg.client_fd;

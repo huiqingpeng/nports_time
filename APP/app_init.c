@@ -76,18 +76,18 @@ void app_start(void) {
 	LOG_INFO("Initializing channel states...\n");
 	for (i = 0; i < NUM_PORTS; i++) {
 		// 设置默认配置
-		g_channel_states[i].baudrate = 9600;
-		g_channel_states[i].data_bits = 8;
-		g_channel_states[i].stop_bits = 1;
-		g_channel_states[i].parity = 'N';
+		g_system_config.channels[i].baudrate = 9600;
+		g_system_config.channels[i].data_bits = 8;
+		g_system_config.channels[i].stop_bits = 1;
+		g_system_config.channels[i].parity = 'N';
 		for(j=0;j<MAX_CLIENTS_PER_CHANNEL;j++)
 		{
-			g_channel_states[i].data_client_fds[j] = -1;	
+			g_system_config.channels[i].data_client_fds[j] = -1;	
 		}
 
 		// 初始化环形缓冲区
-		ring_buffer_init(&g_channel_states[i].buffer_net,  g_channel_states[i].net_buffer_mem,  RING_BUFFER_SIZE);
-		ring_buffer_init(&g_channel_states[i].buffer_uart, g_channel_states[i].uart_buffer_mem, RING_BUFFER_SIZE);
+		ring_buffer_init(&g_system_config.channels[i].buffer_net,  g_system_config.channels[i].net_buffer_mem,  RING_BUFFER_SIZE);
+		ring_buffer_init(&g_system_config.channels[i].buffer_uart, g_system_config.channels[i].uart_buffer_mem, RING_BUFFER_SIZE);
 	}
 	LOG_INFO("All %d channel states initialized.\n", NUM_PORTS);
 
@@ -110,11 +110,11 @@ void app_start(void) {
                                          0, DEFAULT_STACK_SIZE,
                                          (FUNCPTR)RealTimeSchedulerTask,
                                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    g_udp_search_tid = taskSpawn("tUdpSearch",
-                                 UDP_SEARCH_PRIORITY,
-                                 0, DEFAULT_STACK_SIZE,
-                                 (FUNCPTR)UdpSearchTask,
-                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+   g_udp_search_tid = taskSpawn("tUdpSearch",
+                                UDP_SEARCH_PRIORITY,
+                                0, DEFAULT_STACK_SIZE,
+                                (FUNCPTR)UdpSearchTask,
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
 	if (g_conn_manager_tid == ERROR || g_config_task_manager_tid == ERROR
 			|| g_realtime_scheduler_tid == ERROR || g_udp_search_tid == ERROR) {

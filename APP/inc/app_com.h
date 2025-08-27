@@ -85,7 +85,6 @@ extern MSG_Q_ID g_config_conn_q;
 extern SEM_ID g_config_mutex;
 
 // 主状态数组：包含所有16个通道的状态
-extern ChannelState* g_channel_states;
 extern SystemConfiguration g_system_config;
 
 extern void ConnectionManagerTask(void);

@@ -13,17 +13,18 @@
 
 // 全局配置变量的实体定义
 SystemConfiguration g_system_config;
-ChannelState* g_channel_states = NULL;
 
 /* ------------------ Private Function Prototypes ------------------ */
 static int read_config_from_flash(SystemConfiguration* config);
 static int write_config_to_flash(const SystemConfiguration* config);
+static const char* uart_state_to_string(UartPhysicalState state);
+static const char* net_state_to_string(NetworkChannelState state);
 
 /* ------------------ Public API Implementations ------------------ */
 
 /**
- * @brief 打印当前系统所有配置信息以供调试
- * @details 依次打印全局设备设置和每个通道的详细配置。
+ * @brief 打印当前系统所有配置信息和运行时状态以供调试
+ * @details 依次打印全局设备设置和每个通道的详细配置与状态。
  * 为保证打印数据的一致性，函数会获取配置互斥锁。
  */
 void dev_config_print(void)
@@ -35,7 +36,7 @@ void dev_config_print(void)
 
     LOG_INFO("\n");
     LOG_INFO("============================================================");
-    LOG_INFO("=========       Current System Configuration       =========");
+    LOG_INFO("=========  Current System Configuration & Status   =========");
     LOG_INFO("============================================================");
 
     // 获取互斥锁，以线程安全的方式读取全局配置
@@ -69,19 +70,26 @@ void dev_config_print(void)
         LOG_INFO("  - Gateway: %s", gateway_str);
         LOG_INFO("------------------------------------------------------------");
 
-        /* --- 循环打印每个通道的设置 --- */
+        /* --- 循环打印每个通道的设置和状态 --- */
         for (i = 0; i < NUM_PORTS; i++) {
             ChannelState* ch = &g_system_config.channels[i];
-            LOG_INFO("[Channel %d Settings]", i + 1);
-            LOG_INFO("  - Alias: %s", ch->alias);
-            LOG_INFO("  - Baudrate: %d", ch->baudrate);
-            LOG_INFO("  - Data Bits: %d", ch->data_bits);
-            LOG_INFO("  - Stop Bits: %d", ch->stop_bits);
-            LOG_INFO("  - Parity: %d", ch->parity);
-            LOG_INFO("  - Flow Control: %d", ch->flow_ctrl);
-            LOG_INFO("  - Operation Mode: %d", ch->op_mode);
-            LOG_INFO("  - Max Connections: %d", ch->max_connections);
-            // 您可以根据需要继续添加其他需要打印的通道变量
+            LOG_INFO("[Channel %d Settings & Status]", i + 1);
+            
+            // 打印配置参数
+            LOG_INFO("  [Config]");
+            LOG_INFO("    - Alias: %s", ch->alias);
+            LOG_INFO("    - Baudrate: %d, DataBits: %d, StopBits: %d, Parity: %d",
+                     ch->baudrate, ch->data_bits, ch->stop_bits, ch->parity);
+            
+            // 打印运行时状态
+            LOG_INFO("  [Runtime Status]");
+            LOG_INFO("    - UART Physical State: %s", uart_state_to_string(ch->uart_state));
+            LOG_INFO("    - Data Channel: State=%s, Clients=%d/%d", 
+                     net_state_to_string(ch->data_net_info.state), 
+                     ch->data_net_info.num_clients, 
+                     MAX_CLIENTS_PER_CHANNEL);
+            LOG_INFO("    - Command Channel: State=%s", net_state_to_string(ch->cmd_net_info.state));
+
             LOG_INFO("------------------------------------------------------------");
         }
 
@@ -97,7 +105,6 @@ void dev_config_print(void)
 int dev_config_init(void)
 {
 	LOG_INFO("Initializing device configuration...\n");
-    g_channel_states = g_system_config.channels;
     if (read_config_from_flash(&g_system_config) == OK) {
     	LOG_INFO("Configuration successfully loaded from flash.\n");
         return OK;
@@ -230,6 +237,33 @@ static int write_config_to_flash(const SystemConfiguration* config)
     return OK; // 暂时返回成功
 }
 
+/* ------------------ Helper Functions for Printing States ------------------ */
 
+/**
+ * @brief 将 UartPhysicalState 枚举转换为字符串
+ */
+static const char* uart_state_to_string(UartPhysicalState state)
+{
+    switch (state) {
+        case UART_STATE_CLOSED: return "CLOSED";
+        case UART_STATE_OPENED: return "OPENED";
+        case UART_STATE_ERROR:  return "ERROR";
+        default:                return "UNKNOWN";
+    }
+}
+
+/**
+ * @brief 将 NetworkChannelState 枚举转换为字符串
+ */
+static const char* net_state_to_string(NetworkChannelState state)
+{
+    switch (state) {
+        case NET_STATE_IDLE:      return "IDLE";
+        case NET_STATE_LISTENING: return "LISTENING";
+        case NET_STATE_CONNECTED: return "CONNECTED";
+        case NET_STATE_ERROR:     return "ERROR";
+        default:                  return "UNKNOWN";
+    }
+}
 
 

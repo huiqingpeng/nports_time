@@ -31,11 +31,12 @@ static void cleanup_data_connection(int channel_index,
 
 /* ------------------ Module-level static variables ------------------ */
 static SEM_ID s_timer_sync_sem; // 用于定时器ISR与任务同步的二进制信号量
-
+static volatile uint32_t timer_cnt = 0;
 /* ------------------ Global Variable Definitions ------------------ */
 
 static void high_precision_timer_isr(void *arg) {
 	// ISR中唯一要做的事：释放信号量唤醒实时任务
+	timer_cnt++;
 	semGive(s_timer_sync_sem);
 }
 
@@ -90,12 +91,12 @@ void RealTimeSchedulerTask(void) {
 static void run_high_frequency_tasks(void) {
 	int i;
 	for (i = 0; i < NUM_PORTS; i++) {
-		// TODO: 从串口硬件FIFO读取数据到 g_channel_states[i].buffer_uart
+		// TODO: 从串口硬件FIFO读取数据到 g_system_config.channels[i].buffer_uart
 
 	}
 
 	for (i = 0; i < NUM_PORTS; i++) {
-		// TODO: 从 g_channel_states[i].buffer_net 读取数据写入到串口硬件FIFO
+		// TODO: 从 g_system_config.channels[i].buffer_net 读取数据写入到串口硬件FIFO
 	}
 }
 
@@ -113,7 +114,7 @@ static void run_medium_frequency_tasks(void) {
  */
 static void check_for_new_connections(void) {
     NewConnectionMsg msg;
-    while (msgQReceive(g_data_conn_q, (char*)&msg, sizeof(msg), NO_WAIT) == OK) {
+    while (msgQReceive(g_data_conn_q, (char*)&msg, sizeof(msg), NO_WAIT) == sizeof(NewConnectionMsg)) {
         if (msg.type == CONN_TYPE_DATA && msg.channel_index >= 0 && msg.channel_index < NUM_PORTS) {
             int i = msg.channel_index;
             ChannelState* channel = &g_system_config.channels[i];
@@ -124,16 +125,13 @@ static void check_for_new_connections(void) {
                 channel->data_net_info.client_fds[client_idx] = msg.client_fd;
                 
                 if (channel->data_net_info.num_clients == 0) {
-                    /* --- STATE UPDATE --- */
                     // 第一个客户端连接，状态从 LISTENING 变为 CONNECTED
                     channel->data_net_info.state = NET_STATE_CONNECTED;
                 }
                 channel->data_net_info.num_clients++;
-                
-                printf("RT_Task: Ch %d accepted new client fd=%d. Total clients: %d\n", i, msg.client_fd, channel->data_net_info.num_clients);
-
+                LOG_INFO("RT_Task: Ch %d accepted new client fd=%d. Total clients: %d\n", i, msg.client_fd, channel->data_net_info.num_clients);
             } else {
-                fprintf(stderr, "RT_Task: Ch %d client limit reached. Rejecting fd=%d\n", i, msg.client_fd);
+                LOG_ERROR("RT_Task: Ch %d client limit reached. Rejecting fd=%d\n", i, msg.client_fd);
                 close(msg.client_fd);
             }
             semGive(g_config_mutex);
@@ -154,15 +152,15 @@ static void run_net_recv(void) {
 		// MODIFIED: Loop through all clients for this channel
 		// 从后往前遍历，方便安全地移除断开的连接
 
-		for (j = g_channel_states[i].num_data_clients - 1; j >= 0; j--) {
-			int fd = g_channel_states[i].data_client_fds[j];
+		for (j = g_system_config.channels[i].num_data_clients - 1; j >= 0; j--) {
+			int fd = g_system_config.channels[i].data_client_fds[j];
 			if (fd < 0)
 				continue;
 
 			int n = recv(fd, (char*) temp_buffer, sizeof(temp_buffer), 0);
 			if (n > 0) {
 				// 将收到的数据写入该通道的公共网络缓冲区
-//                ring_buffer_write_bytes(&g_channel_states[i].buffer_net, temp_buffer, n);
+//                ring_buffer_write_bytes(&g_system_config.channels[i].buffer_net, temp_buffer, n);
 				temp_buffer[n] = '\0';
 				LOG_INFO("[ch%d][%d] %d : %s \r\n", i, j, n, temp_buffer);
 			} else if (n == 0) {
@@ -185,11 +183,11 @@ static void run_net_send(void) {
 	temp_buffer[0] = '1';
 	temp_buffer[1] = '\0';
 	for (i = 0; i < NUM_PORTS; i++) {
-		if (g_channel_states[i].num_data_clients == 0)
+		if (g_system_config.channels[i].num_data_clients == 0)
 			continue;
 
 		unsigned int bytes_to_send = 2;
-// bytes_to_send= ring_buffer_bytes_used(&g_channel_states[i].buffer_uart);
+// bytes_to_send= ring_buffer_bytes_used(&g_system_config.channels[i].buffer_uart);
 		if (bytes_to_send == 0)
 			continue;
 
@@ -198,11 +196,11 @@ static void run_net_send(void) {
 		}
 
 		// 从串口缓冲区读取数据
-//        ring_buffer_read_bytes(&g_channel_states[i].buffer_uart, temp_buffer, bytes_to_send);
+//        ring_buffer_read_bytes(&g_system_config.channels[i].buffer_uart, temp_buffer, bytes_to_send);
 
 		// MODIFIED: "Fan-out" data to all clients for this channel
-		for (j = g_channel_states[i].num_data_clients - 1; j >= 0; j--) {
-			int fd = g_channel_states[i].data_client_fds[j];
+		for (j = g_system_config.channels[i].num_data_clients - 1; j >= 0; j--) {
+			int fd = g_system_config.channels[i].data_client_fds[j];
 
 			int sent = send(fd, (char*) temp_buffer, bytes_to_send, 0);
 			if (sent < 0) {
@@ -227,7 +225,7 @@ static void cleanup_data_connection(int channel_index, int client_index_in_array
 
     int fd_to_close = channel->data_net_info.client_fds[client_index_in_array];
     close(fd_to_close);
-    printf("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index, fd_to_close);
+    LOG_INFO("RT_Task: Ch %d cleaned up client fd=%d.\n", channel_index, fd_to_close);
 
     int last_index = channel->data_net_info.num_clients - 1;
     if (client_index_in_array != last_index) {
@@ -237,10 +235,9 @@ static void cleanup_data_connection(int channel_index, int client_index_in_array
     channel->data_net_info.num_clients--;
 
     if (channel->data_net_info.num_clients == 0) {
-        /* --- STATE UPDATE --- */
         // 最后一个客户端断开，状态从 CONNECTED 变回 LISTENING
         channel->data_net_info.state = NET_STATE_LISTENING;
-        printf("RT_Task: Ch %d has no clients left. State -> LISTENING.\n", channel_index);
+        LOG_INFO("RT_Task: Ch %d has no clients left. State -> LISTENING.\n", channel_index);
         
         // 可选：当最后一个客户端断开时，才重置缓冲区
         // ring_buffer_init(&channel->buffer_net, channel->net_buffer_mem, RING_BUFFER_SIZE);
@@ -258,4 +255,10 @@ static int setup_high_precision_timer(void) {
 	app_register_task(high_precision_timer_isr, NULL);
 	ret = OK;
 	return ret;
+}
+
+
+void app_realtime_print(void)
+{
+	LOG_INFO("timer_cnt:%d \r\n",timer_cnt);
 }

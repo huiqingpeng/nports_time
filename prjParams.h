@@ -2,7 +2,7 @@
 
 
 /*
-GENERATED: Wed Aug 20 15:57:39 +0900 2025
+GENERATED: Mon Aug 25 12:35:42 +0900 2025
 DO NOT EDIT - file is regenerated whenever the project changes
 */
 
@@ -1794,7 +1794,7 @@ DO NOT EDIT - file is regenerated whenever the project changes
 #undef  NUM_DRIVERS
 #define NUM_DRIVERS 20
 #undef  NUM_FILES
-#define NUM_FILES 50
+#define NUM_FILES 180
 #undef  MAX_LOG_MSGS
 #define MAX_LOG_MSGS 50
 #undef  LOG_MSG_UNBREAKABLE_TASK_NO_WAIT
