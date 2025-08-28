@@ -378,19 +378,18 @@ static void handle_overview_request(int session_index)
 }
 
 /**
- * @brief 处理 0x02 - 基础设置请求 (新协议分发器)
- * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
+ * @brief 处理 0x02 - 基础设置请求 
+ * @details 根据 Sub_ID 将请求分发给参数读取或参数写入的处理逻辑。
  */
 static void handle_basic_settings_request(int session_index, const unsigned char* frame, int len)
 {
-    // 在新协议中, Sub_ID位于第4个字节 (索引为3)
     // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
     unsigned char sub_id = frame[3]; 
 
     LOG_INFO("ConfigTask: Handling Basic Settings Request (0x02), Sub ID: 0x%02X...", sub_id);
 
     switch (sub_id) {
-        case 0x00: // 参数读取 (设备 -> 上位机)
+        case 0x00: // 参数读取 (设备 -> 上位机) 
             {
                 unsigned char response[256];
                 int offset = 0;
@@ -405,7 +404,7 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                 // --- 2. 填充数据负载 ---
                 semTake(g_config_mutex, WAIT_FOREVER);
                 
-                // Server name
+                // Server name (1 + 39 bytes)
                 server_name_len = strlen(g_system_config.device.server_name);
                 if (server_name_len > MAX_SERVER_NAME_LEN) server_name_len = MAX_SERVER_NAME_LEN;
                 response[offset++] = (unsigned char)server_name_len;
@@ -425,7 +424,7 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                 LOG_DEBUG("  [SENDING] Local Time: %02d-%02d-%02d %02d:%02d:%02d", g_system_config.device.local_time[0], g_system_config.device.local_time[1], g_system_config.device.local_time[2], g_system_config.device.local_time[3], g_system_config.device.local_time[4], g_system_config.device.local_time[5]);
                 LOG_DEBUG("  [SENDING] Time Server IP: %s", inet_ntoa(addr));
 
-                // Settings
+                // Settings (Web, Telnet, LCM, Reset)
                 response[offset++] = g_system_config.device.web_console_enabled;
                 response[offset++] = g_system_config.device.telnet_console_enabled;
                 response[offset++] = g_system_config.device.lcm_password_protected;
@@ -434,7 +433,6 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                 LOG_DEBUG("  [SENDING] Telnet Console Enabled: %d", g_system_config.device.telnet_console_enabled);
                 LOG_DEBUG("  [SENDING] LCM Password Protected: %d", g_system_config.device.lcm_password_protected);
                 LOG_DEBUG("  [SENDING] Reset Button Protected: %d", g_system_config.device.reset_button_protected);
-
                 
                 semGive(g_config_mutex);
 
@@ -442,78 +440,68 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                 response[offset++] = 0x5A; response[offset++] = 0x5A; // End ID
 
                 // --- 4. 发送响应包 ---
-                LOG_DEBUG("offset:%d",offset );
                 send_response(s_sessions[session_index].fd, response, offset);
             }
             break;
 
-        case 0x01: // 时间设置 (上位机 -> 设备)
+        case 0x01: // Basic Settings (上位机 -> 设备), 现在包含所有基础设置
             {
                 const unsigned char* data = frame + 4; // 数据部分从第4个字节之后开始
                 unsigned char server_name_len = data[0];
-                char received_server_name[MAX_SERVER_NAME_LEN];
+                char received_server_name[MAX_SERVER_NAME_LEN + 1];
                 struct in_addr addr;
 
+                // 长度校验
                 if (server_name_len > MAX_SERVER_NAME_LEN) {
                     LOG_ERROR("ConfigTask: Received invalid server name length (%d).", server_name_len);
                     send_framed_ack(s_sessions[session_index].fd, 0x02, 0x01, 0); // 0表示失败
                     return;
                 }
+                
+                // 根据协议，Server name字段是固定的 1+39 字节，后续数据指针应基于此偏移
+                const unsigned char* time_data = data + 1 + MAX_SERVER_NAME_LEN;
 
                 // 打印接收到的信息
                 strncpy(received_server_name, (const char*)&data[1], server_name_len);
                 received_server_name[server_name_len] = '\0';
                 LOG_DEBUG("  [RECEIVED] Server Name: %s", received_server_name);
-                const unsigned char* time_data = data + 1 + server_name_len;
                 LOG_DEBUG("  [RECEIVED] Time Zone: %d", time_data[0]);
                 LOG_DEBUG("  [RECEIVED] Local Time: %02d-%02d-%02d %02d:%02d:%02d", time_data[1], time_data[2], time_data[3], time_data[4], time_data[5], time_data[6]);
-                addr.s_addr = *(unsigned int*)&time_data[7];
+                memcpy(&addr.s_addr, &time_data[7], 4);
                 LOG_DEBUG("  [RECEIVED] Time Server IP: %s", inet_ntoa(addr));
 
-
+                // 根据合并后的协议，继续解析后续的开关量设置
+                const unsigned char* settings_data = time_data + 11; // Time zone(1) + Local time(6) + Time server(4) = 11 bytes
+                
                 semTake(g_config_mutex, WAIT_FOREVER);
                 
                 // 更新 Server name
+                memset(g_system_config.device.server_name, 0, sizeof(g_system_config.device.server_name));
                 strncpy(g_system_config.device.server_name, (const char*)&data[1], server_name_len);
-                g_system_config.device.server_name[server_name_len] = '\0';
-
                 
+                // 更新时间相关设置
                 g_system_config.device.time_zone = time_data[0];
                 memcpy(g_system_config.device.local_time, &time_data[1], 6);
                 memcpy(&g_system_config.device.time_server, &time_data[7], 4);
                 g_system_config.device.time_server = ntohl(g_system_config.device.time_server);
 
+                // 更新开关量设置
+                g_system_config.device.web_console_enabled    = settings_data[0];
+                g_system_config.device.telnet_console_enabled = settings_data[1];
+                g_system_config.device.lcm_password_protected = settings_data[2];
+                g_system_config.device.reset_button_protected = settings_data[3];
+
+                LOG_DEBUG("  [RECEIVED] Web Console Enabled: %d", settings_data[0]);
+                LOG_DEBUG("  [RECEIVED] Telnet Console Enabled: %d", settings_data[1]);
+                LOG_DEBUG("  [RECEIVED] LCM Password Protected: %d", settings_data[2]);
+                LOG_DEBUG("  [RECEIVED] Reset Button Protected: %d", settings_data[3]);
+
                 semGive(g_config_mutex);
                 
                 // TODO: 在这里可以添加实际设置系统时间的代码
                 
-                LOG_INFO("ConfigTask: Updated Time Settings.");
+                LOG_INFO("ConfigTask: Updated all Basic Settings.");
                 send_framed_ack(s_sessions[session_index].fd, 0x02, 0x01, 1); // 1表示成功
-            }
-            break;
-
-        case 0x02: // 其他开关设置 (上位机 -> 设备)
-            {
-                const unsigned char* data = frame + 4;
-
-                // 打印接收到的信息
-                LOG_DEBUG("  [RECEIVED] Web Console Enabled: %d", data[0]);
-                LOG_DEBUG("  [RECEIVED] Telnet Console Enabled: %d", data[1]);
-                LOG_DEBUG("  [RECEIVED] LCM Password Protected: %d", data[2]);
-                LOG_DEBUG("  [RECEIVED] Reset Button Protected: %d", data[3]);
-
-
-                semTake(g_config_mutex, WAIT_FOREVER);
-                
-                g_system_config.device.web_console_enabled    = data[0];
-                g_system_config.device.telnet_console_enabled = data[1];
-                g_system_config.device.lcm_password_protected = data[2];
-                g_system_config.device.reset_button_protected = data[3];
-
-                semGive(g_config_mutex);
-
-                LOG_INFO("ConfigTask: Updated Enable/Disable Settings.");
-                send_framed_ack(s_sessions[session_index].fd, 0x02, 0x02, 1); // 1表示成功
             }
             break;
 
@@ -524,9 +512,8 @@ static void handle_basic_settings_request(int session_index, const unsigned char
     }
 }
 
-
 /**
- * @brief 处理 0x03 - 网络设置请求 (新协议分发器)
+ * @brief 处理 0x03 - 网络设置请求
  * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
  */
 static void handle_network_settings_request(int session_index, const unsigned char* frame, int len)
@@ -536,7 +523,6 @@ static void handle_network_settings_request(int session_index, const unsigned ch
     struct in_addr addr; // 用于IP地址转换
 
     LOG_INFO("ConfigTask: Handling Network Settings Request (0x03), Sub ID: 0x%02X...", sub_id);
-
 
     switch (sub_id) {
         case 0x00: // 参数读取 (设备 -> 上位机)
@@ -571,7 +557,6 @@ static void handle_network_settings_request(int session_index, const unsigned ch
                 offset += 4;
                 addr.s_addr = temp_ip;
                 LOG_DEBUG("  [SENDING] Gateway: %s", inet_ntoa(addr));
-
 
                 // IP configuration (1 byte)
                 response[offset++] = g_system_config.device.ip_config_mode;
@@ -611,7 +596,6 @@ static void handle_network_settings_request(int session_index, const unsigned ch
                 offset += 2;
                 LOG_DEBUG("  [SENDING] Auto Report Period: %d", g_system_config.device.auto_report_period);
 
-
                 semGive(g_config_mutex);
 
                 // --- 3. 填充帧尾 ---
@@ -622,11 +606,12 @@ static void handle_network_settings_request(int session_index, const unsigned ch
             }
             break;
 
-        case 0x01: // 写入 "Network Settings"
+        case 0x01: // 写入所有网络设置 (上位机 -> 设备)
             {
                 const unsigned char* data = frame + 4;
-
-                // 打印接收到的信息
+                int offset = 0;
+		
+		// 打印接收到的信息
                 addr.s_addr = *(unsigned int*)&data[0];
                 LOG_DEBUG("  [RECEIVED] IP Address: %s", inet_ntoa(addr));
                 addr.s_addr = *(unsigned int*)&data[4];
@@ -641,77 +626,58 @@ static void handle_network_settings_request(int session_index, const unsigned ch
 
                 semTake(g_config_mutex, WAIT_FOREVER);
 
-                memcpy(&g_system_config.device.ip_address, &data[0], 4);
+                // 1. 解析并更新 IP, Netmask, Gateway
+                memcpy(&g_system_config.device.ip_address, &data[offset], 4);
                 g_system_config.device.ip_address = ntohl(g_system_config.device.ip_address);
+                offset += 4;
 
-                memcpy(&g_system_config.device.netmask, &data[4], 4);
+                memcpy(&g_system_config.device.netmask, &data[offset], 4);
                 g_system_config.device.netmask = ntohl(g_system_config.device.netmask);
+                offset += 4;
                 
-                memcpy(&g_system_config.device.gateway, &data[8], 4);
+                memcpy(&g_system_config.device.gateway, &data[offset], 4);
                 g_system_config.device.gateway = ntohl(g_system_config.device.gateway);
+                offset += 4;
 
-                g_system_config.device.ip_config_mode = data[12];
+                // 2. 解析并更新 IP Config Mode
+                g_system_config.device.ip_config_mode = data[offset++];
 
-                memcpy(&g_system_config.device.dns_server1, &data[13], 4);
+                // 3. 解析并更新 DNS Servers
+                memcpy(&g_system_config.device.dns_server1, &data[offset], 4);
                 g_system_config.device.dns_server1 = ntohl(g_system_config.device.dns_server1);
+                offset += 4;
 
-                memcpy(&g_system_config.device.dns_server2, &data[17], 4);
+                memcpy(&g_system_config.device.dns_server2, &data[offset], 4);
                 g_system_config.device.dns_server2 = ntohl(g_system_config.device.dns_server2);
+                offset += 4;
+
+                // 4. 解析并更新 SNMP
+                g_system_config.device.snmp_enabled = data[offset++];
+		        LOG_DEBUG("  [RECEIVED] SNMP Enabled: %d",g_system_config.device.snmp_enabled);
+
+                // 5. 解析并更新 Auto Report 设置
+                memcpy(&g_system_config.device.auto_report_ip, &data[offset], 4);
+                g_system_config.device.auto_report_ip = ntohl(g_system_config.device.auto_report_ip);
+                offset += 4;
+                
+                memcpy(&g_system_config.device.auto_report_udp_port, &data[offset], 2);
+                g_system_config.device.auto_report_udp_port = ntohs(g_system_config.device.auto_report_udp_port);
+                offset += 2;
+
+                memcpy(&g_system_config.device.auto_report_period, &data[offset], 2);
+                g_system_config.device.auto_report_period = ntohs(g_system_config.device.auto_report_period);
+                offset += 2;
 
                 semGive(g_config_mutex);
                 
                 // TODO: 在此调用实际应用网络配置的函数 (e.g., ifconfig)
+		
+	    	    LOG_DEBUG("  [RECEIVED] Auto Report IP: %s", inet_ntoa(g_system_config.device.auto_report_ip));
+                LOG_DEBUG("  [RECEIVED] Auto Report UDP Port: %d", g_system_config.device.auto_report_udp_port);
+                LOG_DEBUG("  [RECEIVED] Auto Report Period: %d", g_system_config.device.auto_report_period);
                 
-                LOG_INFO("ConfigTask: Updated Network Settings.");
+                LOG_INFO("ConfigTask: Updated all Network Settings.");
                 send_framed_ack(s_sessions[session_index].fd, 0x03, 0x01, 1); // 成功
-            }
-            break;
-
-        case 0x02: // 写入 "SNMP Setting"
-            {
-                const unsigned char* data = frame + 4;
-                
-                LOG_DEBUG("  [RECEIVED] SNMP Enabled: %d", data[0]);
-
-                semTake(g_config_mutex, WAIT_FOREVER);
-                g_system_config.device.snmp_enabled = data[0];
-                semGive(g_config_mutex);
-
-                LOG_INFO("ConfigTask: Updated SNMP Setting to %d.", data[0]);
-                send_framed_ack(s_sessions[session_index].fd, 0x03, 0x02, 1); // 成功
-            }
-            break;
-
-        case 0x03: // 写入 "IP Address report"
-            {
-                const unsigned char* data = frame + 4;
-                unsigned short port, period;
-
-                // 打印接收到的信息
-                addr.s_addr = *(unsigned int*)&data[0];
-                LOG_DEBUG("  [RECEIVED] Auto Report IP: %s", inet_ntoa(addr));
-                memcpy(&port, &data[4], 2);
-                port = ntohs(port);
-                LOG_DEBUG("  [RECEIVED] Auto Report UDP Port: %d", port);
-                memcpy(&period, &data[6], 2);
-                period = ntohs(period);
-                LOG_DEBUG("  [RECEIVED] Auto Report Period: %d", period);
-
-                semTake(g_config_mutex, WAIT_FOREVER);
-
-                memcpy(&g_system_config.device.auto_report_ip, &data[0], 4);
-                g_system_config.device.auto_report_ip = ntohl(g_system_config.device.auto_report_ip);
-
-                memcpy(&g_system_config.device.auto_report_udp_port, &data[4], 2);
-                g_system_config.device.auto_report_udp_port = ntohs(g_system_config.device.auto_report_udp_port);
-
-                memcpy(&g_system_config.device.auto_report_period, &data[6], 2);
-                g_system_config.device.auto_report_period = ntohs(g_system_config.device.auto_report_period);
-
-                semGive(g_config_mutex);
-
-                LOG_INFO("ConfigTask: Updated IP Address Report settings.");
-                send_framed_ack(s_sessions[session_index].fd, 0x03, 0x03, 1); // 成功
             }
             break;
 
@@ -721,7 +687,6 @@ static void handle_network_settings_request(int session_index, const unsigned ch
             break;
     }
 }
-
 
 /**
  * @brief 将单个串口通道的配置打包到缓冲区
@@ -768,8 +733,9 @@ static int pack_serial_settings(int channel_index, unsigned char* buffer)
     
     return offset;
 }
+
 /**
- * @brief 处理 0x04 - 串口设置请求 (新协议分发器)
+ * @brief 处理 0x04 - 串口设置请求
  * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
  */
 static void handle_serial_settings_request(int session_index, const unsigned char* frame, int len)
@@ -812,6 +778,7 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
             }
             break;
 
+
         case 0x01: // 读取单个串口设置
             {
                 const unsigned char* data = frame + 4;
@@ -822,8 +789,7 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
 
                 if (port_index < 1 || port_index > NUM_PORTS) {
                     LOG_ERROR("ConfigTask: Invalid port index %d for read.", port_index);
-                    // 根据协议，读取失败没有明确的ACK，可以选择不回复或自定义错误
-                    return;
+                    return; // 无效请求，不回复
                 }
                 int channel_index = port_index - 1; // 0-based index
 
@@ -843,16 +809,14 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
             }
             break;
 
-        case 0x02: // 写入单个串口设置
+        case 0x02: // 【修正】: 写入单个串口设置
             {
                 const unsigned char* data = frame + 4;
                 int data_offset = 0;
-                
                 unsigned char port_index = data[data_offset++];
                 
                 LOG_DEBUG("  Action: Write Single Serial Port Setting.");
                 LOG_DEBUG("  [RECEIVED] Target Port Index: %d", port_index);
-
 
                 if (port_index < 1 || port_index > NUM_PORTS) {
                     LOG_ERROR("ConfigTask: Invalid port index %d for write.", port_index);
@@ -866,12 +830,12 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
 
                 // Alias
                 unsigned char alias_len = data[data_offset++];
-                char received_alias[MAX_ALIAS_LEN];
-                if (alias_len > MAX_ALIAS_LEN) alias_len = MAX_ALIAS_LEN;
-                strncpy(received_alias, (const char*)&data[data_offset], alias_len);
-                received_alias[alias_len] = '\0';
-                LOG_DEBUG("    - Alias: %s", received_alias);
-                strcpy(ch->alias, received_alias);
+                if (alias_len > MAX_ALIAS_LEN) alias_len = MAX_ALIAS_LEN; // 长度保护
+                
+                memset(ch->alias, 0, sizeof(ch->alias));
+                strncpy(ch->alias, (const char*)&data[data_offset], alias_len);
+                LOG_DEBUG("    - Alias: %s", ch->alias);
+                
                 data_offset += MAX_ALIAS_LEN;
 
                 // Baud, Data bits, etc.
