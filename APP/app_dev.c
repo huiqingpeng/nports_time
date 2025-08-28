@@ -173,7 +173,8 @@ void dev_config_load_defaults(void)
 		dev->hardware_version[0] = 1;
 		dev->hardware_version[1] = 0;
 		dev->hardware_version[2] = 0;
-		strncpy(dev->server_name, "SerialServer_Default", MAX_SERVER_NAME_LEN);
+		strncpy(dev->server_name, "SerialServer_WQ", MAX_SERVER_NAME_LEN);
+		strncpy(dev->user_name, "admin", MAX_PASSWORD_LEN);
 		strncpy(dev->password, "admin", MAX_PASSWORD_LEN);
 		dev->ip_config_mode = 1; // DHCP
 		dev->ip_address = inet_addr("192.168.8.4");

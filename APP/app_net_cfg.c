@@ -248,7 +248,7 @@ static int handle_config_client(int index) {
  * @brief 主命令分发器
  */
 static void process_command_frame(int session_index, const unsigned char* frame, int len) {
-    unsigned char command_id = frame[0];
+    unsigned char command_id = frame[2];
     switch (command_id) {
         case 0x01: handle_overview_request(session_index); break;
         case 0x02: handle_basic_settings_request(session_index, frame, len); break;
@@ -321,27 +321,40 @@ static void handle_overview_request(int session_index)
         model_name_len = MAX_MODEL_NAME_LEN;
     }
     response[offset++] = (unsigned char)model_name_len;
-    memcpy(&response[offset], g_system_config.device.model_name, model_name_len);
-    offset += model_name_len;
+    memcpy(&response[offset], g_system_config.device.model_name, MAX_MODEL_NAME_LEN);
+    offset += MAX_MODEL_NAME_LEN;
+    LOG_DEBUG("  [SENDING] Model Name: %s", g_system_config.device.model_name);
 
     // 3.2 MAC Address (6 bytes)
     memcpy(&response[offset], g_system_config.device.mac_address, 6);
     offset += 6;
+    LOG_DEBUG("  [SENDING] MAC Address: %02X:%02X:%02X:%02X:%02X:%02X",
+              g_system_config.device.mac_address[0], g_system_config.device.mac_address[1],
+              g_system_config.device.mac_address[2], g_system_config.device.mac_address[3],
+              g_system_config.device.mac_address[4], g_system_config.device.mac_address[5]);
 
     // 3.3 Serial No (2 bytes, network byte order)
     *(unsigned short*)&response[offset] = htons(g_system_config.device.serial_no);
     offset += 2;
+    LOG_DEBUG("  [SENDING] Serial No: %u", g_system_config.device.serial_no);
 
     // 3.4 Firmware Version (3 bytes)
     memcpy(&response[offset], g_system_config.device.firmware_version, 3);
     offset += 3;
+    LOG_DEBUG("  [SENDING] Firmware Version: %d.%d.%d", 
+              g_system_config.device.firmware_version[0], g_system_config.device.firmware_version[1], 
+              g_system_config.device.firmware_version[2]);
 
     // 3.5 Hardware Version (3 bytes)
     memcpy(&response[offset], g_system_config.device.hardware_version, 3);
     offset += 3;
+    LOG_DEBUG("  [SENDING] Hardware Version: %d.%d.%d", 
+              g_system_config.device.hardware_version[0], g_system_config.device.hardware_version[1], 
+              g_system_config.device.hardware_version[2]);
     
     // 3.7 LCM (1 byte)
     response[offset++] = g_system_config.device.lcm_present;
+    LOG_DEBUG("  [SENDING] LCM Present: %d", g_system_config.device.lcm_present);
 
     semGive(g_config_mutex);
 
@@ -351,6 +364,7 @@ static void handle_overview_request(int session_index)
     response[offset++] = (unsigned char)((uptime_sec % 86400) / 3600); // byte2: Hours
     response[offset++] = (unsigned char)((uptime_sec % 3600) / 60);  // byte3: Minutes
     response[offset++] = (unsigned char)(uptime_sec % 60);           // byte4: Seconds
+    LOG_DEBUG("  [SENDING] Uptime: %u seconds", uptime_sec);
 
     // --- 4. 填充帧尾 (End ID: 0x5A5A) ---
     response[offset++] = 0x5A;
@@ -373,13 +387,16 @@ static void handle_basic_settings_request(int session_index, const unsigned char
     // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
     unsigned char sub_id = frame[3]; 
 
+    LOG_INFO("ConfigTask: Handling Basic Settings Request (0x02), Sub ID: 0x%02X...", sub_id);
+
     switch (sub_id) {
         case 0x00: // 参数读取 (设备 -> 上位机)
             {
                 unsigned char response[256];
                 int offset = 0;
                 size_t server_name_len;
-                unsigned int time_server_ip;
+                unsigned int time_server_ip_net_order; // 使用网络字节序的临时变量
+                struct in_addr addr;
 
                 // --- 1. 填充帧头和功能码 ---
                 response[offset++] = 0xA5; response[offset++] = 0xA5; // Head ID
@@ -392,22 +409,32 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                 server_name_len = strlen(g_system_config.device.server_name);
                 if (server_name_len > MAX_SERVER_NAME_LEN) server_name_len = MAX_SERVER_NAME_LEN;
                 response[offset++] = (unsigned char)server_name_len;
-                memcpy(&response[offset], g_system_config.device.server_name, server_name_len);
-                offset += server_name_len;
+                memcpy(&response[offset], g_system_config.device.server_name, MAX_SERVER_NAME_LEN);
+                offset += MAX_SERVER_NAME_LEN;
+                LOG_DEBUG("  [SENDING] len : %d Server Name: %s", server_name_len, g_system_config.device.server_name);
 
                 // Time zone, Local time, Time server
                 response[offset++] = g_system_config.device.time_zone;
                 memcpy(&response[offset], g_system_config.device.local_time, 6);
                 offset += 6;
-                time_server_ip = htonl(g_system_config.device.time_server);
-                memcpy(&response[offset], &time_server_ip, 4);
+                time_server_ip_net_order = htonl(g_system_config.device.time_server);
+                memcpy(&response[offset], &time_server_ip_net_order, 4);
                 offset += 4;
+                addr.s_addr = time_server_ip_net_order;
+                LOG_DEBUG("  [SENDING] Time Zone: %d", g_system_config.device.time_zone);
+                LOG_DEBUG("  [SENDING] Local Time: %02d-%02d-%02d %02d:%02d:%02d", g_system_config.device.local_time[0], g_system_config.device.local_time[1], g_system_config.device.local_time[2], g_system_config.device.local_time[3], g_system_config.device.local_time[4], g_system_config.device.local_time[5]);
+                LOG_DEBUG("  [SENDING] Time Server IP: %s", inet_ntoa(addr));
 
                 // Settings
                 response[offset++] = g_system_config.device.web_console_enabled;
                 response[offset++] = g_system_config.device.telnet_console_enabled;
                 response[offset++] = g_system_config.device.lcm_password_protected;
                 response[offset++] = g_system_config.device.reset_button_protected;
+                LOG_DEBUG("  [SENDING] Web Console Enabled: %d", g_system_config.device.web_console_enabled);
+                LOG_DEBUG("  [SENDING] Telnet Console Enabled: %d", g_system_config.device.telnet_console_enabled);
+                LOG_DEBUG("  [SENDING] LCM Password Protected: %d", g_system_config.device.lcm_password_protected);
+                LOG_DEBUG("  [SENDING] Reset Button Protected: %d", g_system_config.device.reset_button_protected);
+
                 
                 semGive(g_config_mutex);
 
@@ -415,8 +442,8 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                 response[offset++] = 0x5A; response[offset++] = 0x5A; // End ID
 
                 // --- 4. 发送响应包 ---
+                LOG_DEBUG("offset:%d",offset );
                 send_response(s_sessions[session_index].fd, response, offset);
-                LOG_INFO("ConfigTask: Sent Basic Settings response.");
             }
             break;
 
@@ -424,6 +451,8 @@ static void handle_basic_settings_request(int session_index, const unsigned char
             {
                 const unsigned char* data = frame + 4; // 数据部分从第4个字节之后开始
                 unsigned char server_name_len = data[0];
+                char received_server_name[MAX_SERVER_NAME_LEN];
+                struct in_addr addr;
 
                 if (server_name_len > MAX_SERVER_NAME_LEN) {
                     LOG_ERROR("ConfigTask: Received invalid server name length (%d).", server_name_len);
@@ -431,13 +460,24 @@ static void handle_basic_settings_request(int session_index, const unsigned char
                     return;
                 }
 
+                // 打印接收到的信息
+                strncpy(received_server_name, (const char*)&data[1], server_name_len);
+                received_server_name[server_name_len] = '\0';
+                LOG_DEBUG("  [RECEIVED] Server Name: %s", received_server_name);
+                const unsigned char* time_data = data + 1 + server_name_len;
+                LOG_DEBUG("  [RECEIVED] Time Zone: %d", time_data[0]);
+                LOG_DEBUG("  [RECEIVED] Local Time: %02d-%02d-%02d %02d:%02d:%02d", time_data[1], time_data[2], time_data[3], time_data[4], time_data[5], time_data[6]);
+                addr.s_addr = *(unsigned int*)&time_data[7];
+                LOG_DEBUG("  [RECEIVED] Time Server IP: %s", inet_ntoa(addr));
+
+
                 semTake(g_config_mutex, WAIT_FOREVER);
                 
                 // 更新 Server name
                 strncpy(g_system_config.device.server_name, (const char*)&data[1], server_name_len);
                 g_system_config.device.server_name[server_name_len] = '\0';
 
-                const unsigned char* time_data = data + 1 + server_name_len;
+                
                 g_system_config.device.time_zone = time_data[0];
                 memcpy(g_system_config.device.local_time, &time_data[1], 6);
                 memcpy(&g_system_config.device.time_server, &time_data[7], 4);
@@ -455,6 +495,13 @@ static void handle_basic_settings_request(int session_index, const unsigned char
         case 0x02: // 其他开关设置 (上位机 -> 设备)
             {
                 const unsigned char* data = frame + 4;
+
+                // 打印接收到的信息
+                LOG_DEBUG("  [RECEIVED] Web Console Enabled: %d", data[0]);
+                LOG_DEBUG("  [RECEIVED] Telnet Console Enabled: %d", data[1]);
+                LOG_DEBUG("  [RECEIVED] LCM Password Protected: %d", data[2]);
+                LOG_DEBUG("  [RECEIVED] Reset Button Protected: %d", data[3]);
+
 
                 semTake(g_config_mutex, WAIT_FOREVER);
                 
@@ -477,6 +524,7 @@ static void handle_basic_settings_request(int session_index, const unsigned char
     }
 }
 
+
 /**
  * @brief 处理 0x03 - 网络设置请求 (新协议分发器)
  * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
@@ -484,7 +532,11 @@ static void handle_basic_settings_request(int session_index, const unsigned char
 static void handle_network_settings_request(int session_index, const unsigned char* frame, int len)
 {
     // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
-    unsigned char sub_id = frame[3]; 
+    unsigned char sub_id = frame[3];
+    struct in_addr addr; // 用于IP地址转换
+
+    LOG_INFO("ConfigTask: Handling Network Settings Request (0x03), Sub ID: 0x%02X...", sub_id);
+
 
     switch (sub_id) {
         case 0x00: // 参数读取 (设备 -> 上位机)
@@ -505,37 +557,60 @@ static void handle_network_settings_request(int session_index, const unsigned ch
                 temp_ip = htonl(g_system_config.device.ip_address);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
+                addr.s_addr = temp_ip;
+                LOG_DEBUG("  [SENDING] IP Address: %s", inet_ntoa(addr));
+
                 temp_ip = htonl(g_system_config.device.netmask);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
+                addr.s_addr = temp_ip;
+                LOG_DEBUG("  [SENDING] Netmask: %s", inet_ntoa(addr));
+
                 temp_ip = htonl(g_system_config.device.gateway);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
+                addr.s_addr = temp_ip;
+                LOG_DEBUG("  [SENDING] Gateway: %s", inet_ntoa(addr));
+
 
                 // IP configuration (1 byte)
                 response[offset++] = g_system_config.device.ip_config_mode;
+                LOG_DEBUG("  [SENDING] IP Config Mode: %s", (g_system_config.device.ip_config_mode == 1) ? "DHCP" : "Static");
 
                 // DNS servers (4+4 bytes)
                 temp_ip = htonl(g_system_config.device.dns_server1);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
+                addr.s_addr = temp_ip;
+                LOG_DEBUG("  [SENDING] DNS Server 1: %s", inet_ntoa(addr));
+
                 temp_ip = htonl(g_system_config.device.dns_server2);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
+                addr.s_addr = temp_ip;
+                LOG_DEBUG("  [SENDING] DNS Server 2: %s", inet_ntoa(addr));
 
                 // SNMP (1 byte)
                 response[offset++] = g_system_config.device.snmp_enabled;
+                LOG_DEBUG("  [SENDING] SNMP Enabled: %d", g_system_config.device.snmp_enabled);
 
                 // Auto report IP, port, period (4+2+2 bytes)
                 temp_ip = htonl(g_system_config.device.auto_report_ip);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
+                addr.s_addr = temp_ip;
+                LOG_DEBUG("  [SENDING] Auto Report IP: %s", inet_ntoa(addr));
+                
                 temp_port = htons(g_system_config.device.auto_report_udp_port);
                 memcpy(&response[offset], &temp_port, 2);
                 offset += 2;
+                LOG_DEBUG("  [SENDING] Auto Report UDP Port: %d", g_system_config.device.auto_report_udp_port);
+
                 temp_port = htons(g_system_config.device.auto_report_period);
                 memcpy(&response[offset], &temp_port, 2);
                 offset += 2;
+                LOG_DEBUG("  [SENDING] Auto Report Period: %d", g_system_config.device.auto_report_period);
+
 
                 semGive(g_config_mutex);
 
@@ -544,13 +619,26 @@ static void handle_network_settings_request(int session_index, const unsigned ch
 
                 // --- 4. 发送响应包 ---
                 send_response(s_sessions[session_index].fd, response, offset);
-                LOG_INFO("ConfigTask: Sent Network Settings response.");
             }
             break;
 
         case 0x01: // 写入 "Network Settings"
             {
                 const unsigned char* data = frame + 4;
+
+                // 打印接收到的信息
+                addr.s_addr = *(unsigned int*)&data[0];
+                LOG_DEBUG("  [RECEIVED] IP Address: %s", inet_ntoa(addr));
+                addr.s_addr = *(unsigned int*)&data[4];
+                LOG_DEBUG("  [RECEIVED] Netmask: %s", inet_ntoa(addr));
+                addr.s_addr = *(unsigned int*)&data[8];
+                LOG_DEBUG("  [RECEIVED] Gateway: %s", inet_ntoa(addr));
+                LOG_DEBUG("  [RECEIVED] IP Config Mode: %s", (data[12] == 1) ? "DHCP" : "Static");
+                addr.s_addr = *(unsigned int*)&data[13];
+                LOG_DEBUG("  [RECEIVED] DNS Server 1: %s", inet_ntoa(addr));
+                addr.s_addr = *(unsigned int*)&data[17];
+                LOG_DEBUG("  [RECEIVED] DNS Server 2: %s", inet_ntoa(addr));
+
                 semTake(g_config_mutex, WAIT_FOREVER);
 
                 memcpy(&g_system_config.device.ip_address, &data[0], 4);
@@ -582,6 +670,9 @@ static void handle_network_settings_request(int session_index, const unsigned ch
         case 0x02: // 写入 "SNMP Setting"
             {
                 const unsigned char* data = frame + 4;
+                
+                LOG_DEBUG("  [RECEIVED] SNMP Enabled: %d", data[0]);
+
                 semTake(g_config_mutex, WAIT_FOREVER);
                 g_system_config.device.snmp_enabled = data[0];
                 semGive(g_config_mutex);
@@ -594,6 +685,18 @@ static void handle_network_settings_request(int session_index, const unsigned ch
         case 0x03: // 写入 "IP Address report"
             {
                 const unsigned char* data = frame + 4;
+                unsigned short port, period;
+
+                // 打印接收到的信息
+                addr.s_addr = *(unsigned int*)&data[0];
+                LOG_DEBUG("  [RECEIVED] Auto Report IP: %s", inet_ntoa(addr));
+                memcpy(&port, &data[4], 2);
+                port = ntohs(port);
+                LOG_DEBUG("  [RECEIVED] Auto Report UDP Port: %d", port);
+                memcpy(&period, &data[6], 2);
+                period = ntohs(period);
+                LOG_DEBUG("  [RECEIVED] Auto Report Period: %d", period);
+
                 semTake(g_config_mutex, WAIT_FOREVER);
 
                 memcpy(&g_system_config.device.auto_report_ip, &data[0], 4);
@@ -619,6 +722,7 @@ static void handle_network_settings_request(int session_index, const unsigned ch
     }
 }
 
+
 /**
  * @brief 将单个串口通道的配置打包到缓冲区
  * @param channel_index 要打包的通道索引 (0-15)
@@ -632,6 +736,13 @@ static int pack_serial_settings(int channel_index, unsigned char* buffer)
     unsigned int temp_baud;
     ChannelState* ch = &g_system_config.channels[channel_index];
 
+    LOG_DEBUG("  [PACKING] Port %d Settings:", channel_index + 1);
+    LOG_DEBUG("    - Alias: %s", ch->alias);
+    LOG_DEBUG("    - Baudrate: %d", ch->baudrate);
+    LOG_DEBUG("    - DataBits: %d, StopBits: %d, Parity: %d", ch->data_bits, ch->stop_bits, ch->parity);
+    LOG_DEBUG("    - FIFO: %d, FlowCtrl: %d, Interface: %d", ch->fifo_enable, ch->flow_ctrl, ch->interface_type);
+
+
     // 1. Port Index (1-based)
     buffer[offset++] = (unsigned char)(channel_index + 1);
 
@@ -639,8 +750,8 @@ static int pack_serial_settings(int channel_index, unsigned char* buffer)
     alias_len = strlen(ch->alias);
     if (alias_len > MAX_ALIAS_LEN) alias_len = MAX_ALIAS_LEN;
     buffer[offset++] = (unsigned char)alias_len;
-    memcpy(&buffer[offset], ch->alias, alias_len);
-    offset += alias_len;
+    memcpy(&buffer[offset], ch->alias, MAX_ALIAS_LEN);
+    offset += MAX_ALIAS_LEN;
 
     // 3. Baud rate (4 bytes, network byte order)
     temp_baud = htonl(ch->baudrate);
@@ -657,7 +768,6 @@ static int pack_serial_settings(int channel_index, unsigned char* buffer)
     
     return offset;
 }
-
 /**
  * @brief 处理 0x04 - 串口设置请求 (新协议分发器)
  * @details 根据 Sub_ID 将请求分发给参数读取或写入的处理逻辑。
@@ -667,6 +777,9 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
     // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
     unsigned char sub_id = frame[3]; 
 
+    LOG_INFO("ConfigTask: Handling Serial Settings Request (0x04), Sub ID: 0x%02X...", sub_id);
+
+
     switch (sub_id) {
         case 0x00: // 读取所有串口设置
             {
@@ -675,12 +788,15 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
                 int offset = 0;
                 int i;
 
+                LOG_DEBUG("  Action: Read All Serial Settings.");
+
                 // --- 1. 填充帧头和功能码 ---
                 response[offset++] = 0xA5; response[offset++] = 0xA5; // Head ID
                 response[offset++] = 0x04; response[offset++] = 0x00; // Command & Sub ID
 
                 // --- 2. 填充数据负载 ---
                 response[offset++] = NUM_PORTS; // 串口数量
+                LOG_DEBUG("  [SENDING] Total Port Count: %d", NUM_PORTS);
 
                 semTake(g_config_mutex, WAIT_FOREVER);
                 for (i = 0; i < NUM_PORTS; i++) {
@@ -693,7 +809,6 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
 
                 // --- 4. 发送响应包 ---
                 send_response(s_sessions[session_index].fd, response, offset);
-                LOG_INFO("ConfigTask: Sent All Serial Settings response.");
             }
             break;
 
@@ -701,6 +816,9 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
             {
                 const unsigned char* data = frame + 4;
                 unsigned char port_index = data[0]; // 1-based index
+
+                LOG_DEBUG("  Action: Read Single Serial Port Setting.");
+                LOG_DEBUG("  [RECEIVED] Port Index: %d", port_index);
 
                 if (port_index < 1 || port_index > NUM_PORTS) {
                     LOG_ERROR("ConfigTask: Invalid port index %d for read.", port_index);
@@ -722,7 +840,6 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
                 response[offset++] = 0x5A; response[offset++] = 0x5A;
 
                 send_response(s_sessions[session_index].fd, response, offset);
-                LOG_INFO("ConfigTask: Sent Serial Settings for Port %d.", port_index);
             }
             break;
 
@@ -733,6 +850,10 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
                 
                 unsigned char port_index = data[data_offset++];
                 
+                LOG_DEBUG("  Action: Write Single Serial Port Setting.");
+                LOG_DEBUG("  [RECEIVED] Target Port Index: %d", port_index);
+
+
                 if (port_index < 1 || port_index > NUM_PORTS) {
                     LOG_ERROR("ConfigTask: Invalid port index %d for write.", port_index);
                     send_framed_ack(s_sessions[session_index].fd, 0x04, 0x02, 0); // 失败
@@ -745,14 +866,19 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
 
                 // Alias
                 unsigned char alias_len = data[data_offset++];
+                char received_alias[MAX_ALIAS_LEN];
                 if (alias_len > MAX_ALIAS_LEN) alias_len = MAX_ALIAS_LEN;
-                strncpy(ch->alias, (const char*)&data[data_offset], alias_len);
-                ch->alias[alias_len] = '\0';
-                data_offset += alias_len;
+                strncpy(received_alias, (const char*)&data[data_offset], alias_len);
+                received_alias[alias_len] = '\0';
+                LOG_DEBUG("    - Alias: %s", received_alias);
+                strcpy(ch->alias, received_alias);
+                data_offset += MAX_ALIAS_LEN;
 
                 // Baud, Data bits, etc.
-                memcpy(&ch->baudrate, &data[data_offset], 4);
-                ch->baudrate = ntohl(ch->baudrate);
+                unsigned int received_baud;
+                memcpy(&received_baud, &data[data_offset], 4);
+                ch->baudrate = ntohl(received_baud);
+                LOG_DEBUG("    - Baudrate: %d", ch->baudrate);
                 data_offset += 4;
 
                 ch->data_bits = data[data_offset++];
@@ -761,6 +887,8 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
                 ch->fifo_enable = data[data_offset++];
                 ch->flow_ctrl = data[data_offset++];
                 ch->interface_type = data[data_offset++];
+                LOG_DEBUG("    - DataBits: %d, StopBits: %d, Parity: %d", ch->data_bits, ch->stop_bits, ch->parity);
+                LOG_DEBUG("    - FIFO: %d, FlowCtrl: %d, Interface: %d", ch->fifo_enable, ch->flow_ctrl, ch->interface_type);
                 
                 semGive(g_config_mutex);
 
@@ -787,13 +915,21 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
 {
     // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
     unsigned char sub_id = frame[3]; 
+    struct in_addr addr; // 用于IP地址转换
+
+    LOG_INFO("ConfigTask: Handling Monitor Request (0x06), Sub ID: 0x%02X...", sub_id);
+
 
     switch (sub_id) {
         case 0x01: // 读取 Monitor Line
             {
                 const unsigned char* data = frame + 4;
-                unsigned char port_count = NUM_PORTS;
+                unsigned char port_count = data[0]; // 第一个字节是端口数量
                 int i;
+
+                LOG_DEBUG("  Action: Read Monitor Line.");
+                LOG_DEBUG("  [RECEIVED] Requested Port Count: %d", port_count);
+
 
                 if (port_count == 0 || port_count > NUM_PORTS) {
                      LOG_ERROR("ConfigTask: Invalid port count %d for Monitor Line.", port_count);
@@ -818,17 +954,31 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
                         ChannelState* ch = &g_system_config.channels[channel_index];
                         unsigned int temp_ip;
 
+                        LOG_DEBUG("  [SENDING] Port %d Monitor Line Data:", port_index);
+
                         response[offset++] = port_index;
                         response[offset++] = ch->op_mode;
+                        LOG_DEBUG("    - Op Mode: %d", ch->op_mode);
                         
                         temp_ip = htonl(ch->op_mode_ip1);
                         memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        addr.s_addr = temp_ip;
+                        LOG_DEBUG("    - IP 1: %s", inet_ntoa(addr));
+
                         temp_ip = htonl(ch->op_mode_ip2);
                         memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        addr.s_addr = temp_ip;
+                        LOG_DEBUG("    - IP 2: %s", inet_ntoa(addr));
+                        
                         temp_ip = htonl(ch->op_mode_ip3);
                         memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        addr.s_addr = temp_ip;
+                        LOG_DEBUG("    - IP 3: %s", inet_ntoa(addr));
+
                         temp_ip = htonl(ch->op_mode_ip4);
                         memcpy(&response[offset], &temp_ip, 4); offset += 4;
+                        addr.s_addr = temp_ip;
+                        LOG_DEBUG("    - IP 4: %s", inet_ntoa(addr));
                     }
                 }
                 semGive(g_config_mutex);
@@ -838,7 +988,6 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
 
                 // --- 4. 发送响应包 ---
                 send_response(s_sessions[session_index].fd, response, offset);
-                LOG_INFO("ConfigTask: Sent Monitor Line response for %d ports.", port_count);
             }
             break;
 
@@ -847,6 +996,9 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
                 const unsigned char* data = frame + 4;
                 unsigned char port_count = NUM_PORTS;
                 int i;
+
+                LOG_DEBUG("  Action: Read Monitor Async.");
+                LOG_DEBUG("  [RECEIVED] Requested Port Count: %d", port_count);
 
                 if (port_count == 0 || port_count > NUM_PORTS) {
                      LOG_ERROR("ConfigTask: Invalid port count %d for Monitor Async.", port_count);
@@ -868,30 +1020,40 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
                         ChannelState* ch = &g_system_config.channels[channel_index];
                         unsigned int temp_32;
                         unsigned long long temp_64;
+                        
+                        LOG_DEBUG("  [SENDING] Port %d Monitor Async Data:", port_index);
 
                         response[offset++] = port_index;
 
                         temp_32 = htonl(ch->tx_count);
                         memcpy(&response[offset], &temp_32, 4); offset += 4;
+                        LOG_DEBUG("    - TX Count: %u", ch->tx_count);
+
                         temp_32 = htonl(ch->rx_count);
                         memcpy(&response[offset], &temp_32, 4); offset += 4;
+                        LOG_DEBUG("    - RX Count: %u", ch->rx_count);
                         
                         // 注意: VxWorks可能没有htobe64, 需要手动转换
+                         
                         temp_64 = ch->tx_total_count;
                         response[offset++] = (temp_64 >> 56) & 0xFF; response[offset++] = (temp_64 >> 48) & 0xFF;
                         response[offset++] = (temp_64 >> 40) & 0xFF; response[offset++] = (temp_64 >> 32) & 0xFF;
                         response[offset++] = (temp_64 >> 24) & 0xFF; response[offset++] = (temp_64 >> 16) & 0xFF;
+
                         response[offset++] = (temp_64 >> 8) & 0xFF;  response[offset++] = temp_64 & 0xFF;
+                        LOG_DEBUG("    - TX Total Count: %llu", ch->tx_total_count);
 
                         temp_64 = ch->rx_total_count;
                         response[offset++] = (temp_64 >> 56) & 0xFF; response[offset++] = (temp_64 >> 48) & 0xFF;
                         response[offset++] = (temp_64 >> 40) & 0xFF; response[offset++] = (temp_64 >> 32) & 0xFF;
                         response[offset++] = (temp_64 >> 24) & 0xFF; response[offset++] = (temp_64 >> 16) & 0xFF;
                         response[offset++] = (temp_64 >> 8) & 0xFF;  response[offset++] = temp_64 & 0xFF;
+                        LOG_DEBUG("    - RX Total Count: %llu", ch->rx_total_count);
 
                         response[offset++] = ch->dsr_status;
                         response[offset++] = ch->cts_status;
                         response[offset++] = ch->dcd_status;
+                        LOG_DEBUG("    - DSR: %d, CTS: %d, DCD: %d", ch->dsr_status, ch->cts_status, ch->dcd_status);
                     }
                 }
                 semGive(g_config_mutex);
@@ -907,6 +1069,9 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
                 const unsigned char* data = frame + 4;
                 unsigned char port_count = NUM_PORTS;
                 int i;
+
+                LOG_DEBUG("  Action: Read Monitor Async Settings.");
+                LOG_DEBUG("  [RECEIVED] Requested Port Count: %d", port_count);
 
                 if (port_count == 0 || port_count > NUM_PORTS) {
                      LOG_ERROR("ConfigTask: Invalid port count %d for Monitor Settings.", port_count);
@@ -928,25 +1093,30 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
                         ChannelState* ch = &g_system_config.channels[channel_index];
                         unsigned int temp_baud;
 
+                        LOG_DEBUG("  [SENDING] Port %d Monitor Async Settings:", port_index);
+
                         response[offset++] = port_index;
 
                         temp_baud = htonl(ch->baudrate);
                         memcpy(&response[offset], &temp_baud, 4); offset += 4;
+                        LOG_DEBUG("    - Baudrate: %d", ch->baudrate);
                         
                         response[offset++] = ch->data_bits;
                         response[offset++] = ch->stop_bits;
                         response[offset++] = ch->parity;
+                        LOG_DEBUG("    - DataBits: %d, StopBits: %d, Parity: %d", ch->data_bits, ch->stop_bits, ch->parity);
+
                         response[offset++] = ch->fifo_enable;
                         response[offset++] = ch->usart_crtscts; // RTS/CTS
                         response[offset++] = ch->IX_on;         // XON/XOFF
                         response[offset++] = ch->usart_mcr_dtr; // DTR/DSR
+                        LOG_DEBUG("    - FIFO: %d, RTS/CTS: %d, XON/XOFF: %d, DTR/DSR: %d", ch->fifo_enable, ch->usart_crtscts, ch->IX_on, ch->usart_mcr_dtr);
                     }
                 }
                 semGive(g_config_mutex);
 
                 response[offset++] = 0x5A; response[offset++] = 0x5A;
                 send_response(s_sessions[session_index].fd, response, offset);
-                LOG_INFO("ConfigTask: Sent Monitor Settings response for %d ports.", port_count);
             }
             break;
 
@@ -967,18 +1137,23 @@ static void handle_change_password_request(int session_index, const unsigned cha
     // 帧结构: [A5 A5] [CmdID] [SubID] [Data...] [5A 5A]
     unsigned char sub_id = frame[3]; 
 
+    LOG_INFO("ConfigTask: Handling Admin Functions Request (0x07), Sub ID: 0x%02X...", sub_id);
+
+
     switch (sub_id) {
         case 0x00: // Login (登录)
             {
                 const unsigned char* data = frame + 4;
                 unsigned char user_len = data[0];
-                char user_recv[MAX_PASSWORD_LEN + 1];
+                char user_recv[MAX_PASSWORD_LEN];
                 
                 const unsigned char* pass_data = data + 1 + user_len;
                 unsigned char pass_len = pass_data[0];
-                char pass_recv[MAX_PASSWORD_LEN + 1];
+                char pass_recv[MAX_PASSWORD_LEN];
 
                 int login_ok = 0;
+                
+                LOG_DEBUG("  Action: Login attempt.");
 
                 // 长度校验
                 if (user_len <= MAX_PASSWORD_LEN && pass_len <= MAX_PASSWORD_LEN) {
@@ -987,6 +1162,10 @@ static void handle_change_password_request(int session_index, const unsigned cha
                     user_recv[user_len] = '\0';
                     strncpy(pass_recv, (const char*)&pass_data[1], pass_len);
                     pass_recv[pass_len] = '\0';
+
+                    // 调试信息：打印接收到的用户名，密码出于安全考虑通常不打印
+                    LOG_DEBUG("  [RECEIVED] Username: '%s'", user_recv);
+                    LOG_DEBUG("  [RECEIVED] Passrecv: '%s'", pass_recv);
 
                     semTake(g_config_mutex, WAIT_FOREVER);
                     // 比较用户名和密码
@@ -1007,19 +1186,21 @@ static void handle_change_password_request(int session_index, const unsigned cha
                 const unsigned char* data = frame + 4;
                 int success = 0;
 
+                LOG_DEBUG("  Action: Change password attempt.");
+
                 // 1. 解析旧密码
                 unsigned char old_pass_len = data[0];
-                char old_pass_recv[MAX_PASSWORD_LEN + 1];
+                char old_pass_recv[MAX_PASSWORD_LEN];
                 const unsigned char* new_pass_data = data + 1 + old_pass_len;
 
                 // 2. 解析新密码
                 unsigned char new_pass_len = new_pass_data[0];
-                char new_pass_recv[MAX_PASSWORD_LEN + 1];
+                char new_pass_recv[MAX_PASSWORD_LEN];
                 const unsigned char* retype_pass_data = new_pass_data + 1 + new_pass_len;
                 
                 // 3. 解析重复输入的新密码
                 unsigned char retype_pass_len = retype_pass_data[0];
-                char retype_pass_recv[MAX_PASSWORD_LEN + 1];
+                char retype_pass_recv[MAX_PASSWORD_LEN];
 
                 // 长度校验
                 if (old_pass_len <= MAX_PASSWORD_LEN && new_pass_len <= MAX_PASSWORD_LEN && retype_pass_len <= MAX_PASSWORD_LEN) {
@@ -1032,6 +1213,12 @@ static void handle_change_password_request(int session_index, const unsigned cha
                     strncpy(retype_pass_recv, (const char*)&retype_pass_data[1], retype_pass_len);
                     retype_pass_recv[retype_pass_len] = '\0';
 
+                    // 调试信息: 出于安全，不打印密码内容，只打印长度
+                    LOG_DEBUG("  [RECEIVED] Old password length: %d", old_pass_len);
+                    LOG_DEBUG("  [RECEIVED] New password length: %d", new_pass_len);
+                    LOG_DEBUG("  [RECEIVED] Retyped new password length: %d", retype_pass_len);
+
+
                     // 逻辑校验
                     if (strcmp(new_pass_recv, retype_pass_recv) == 0 && new_pass_len > 0) {
                         semTake(g_config_mutex, WAIT_FOREVER);
@@ -1041,9 +1228,14 @@ static void handle_change_password_request(int session_index, const unsigned cha
                             strncpy(g_system_config.device.password, new_pass_recv, MAX_PASSWORD_LEN);
                             g_system_config.device.password[MAX_PASSWORD_LEN] = '\0';
                             success = 1;
+                            LOG_DEBUG("    - Old password matched. Password will be updated.");
                             // TODO: 调用 dev_config_save() 将新密码持久化到Flash
+                        } else {
+                            LOG_WARN("    - Old password did not match. Password change failed.");
                         }
                         semGive(g_config_mutex);
+                    } else {
+                        LOG_WARN("    - New passwords do not match or are empty. Password change failed.");
                     }
                 }
                 
@@ -1054,7 +1246,7 @@ static void handle_change_password_request(int session_index, const unsigned cha
 
         case 0x02: // Load Factory Default (恢复出厂设置)
             {
-                LOG_INFO("ConfigTask: Received command to load factory defaults.");
+                LOG_INFO("  Action: Load Factory Defaults.");
                 dev_config_load_defaults();
                 // 恢复出厂设置后，通常需要保存
                 dev_config_save();
@@ -1066,7 +1258,7 @@ static void handle_change_password_request(int session_index, const unsigned cha
 
         case 0x03: // Save/Restart (重启)
             {
-                LOG_INFO("ConfigTask: Received command to save and restart.");
+                LOG_INFO("  Action: Save and Restart.");
                 dev_config_save();
                 // 此操作通常不回复ACK，因为设备将立即重启
                 dev_reboot(); 

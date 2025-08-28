@@ -63,7 +63,7 @@ typedef struct {
  */
 typedef struct {
     /* -- Overview (0x01) -- */
-    char model_name[MAX_MODEL_NAME_LEN + 1];
+    char model_name[MAX_MODEL_NAME_LEN+1];
     unsigned char mac_address[6];
     unsigned short serial_no;
     unsigned char firmware_version[3];
@@ -71,7 +71,7 @@ typedef struct {
     unsigned char lcm_present;
 
     /* -- Basic Settings (0x02) -- */
-    char server_name[MAX_SERVER_NAME_LEN + 1];
+    char server_name[MAX_SERVER_NAME_LEN+1];
     unsigned char web_console_enabled;
     unsigned char telnet_console_enabled;
     unsigned char lcm_password_protected;
@@ -97,8 +97,8 @@ typedef struct {
     unsigned short auto_report_period;
 
     /* -- Login/Admin Settings (0x07) -- */
-    char user_name[MAX_PASSWORD_LEN + 1];
-    char password[MAX_PASSWORD_LEN + 1];
+    char user_name[MAX_PASSWORD_LEN+1];
+    char password[MAX_PASSWORD_LEN+1];
 
 } DeviceSettings;
 
@@ -112,7 +112,7 @@ typedef struct {
     CmdChannelInfo      cmd_net_info;
 
     /* -- Serial Settings (0x04) -- */
-    char alias[MAX_ALIAS_LEN + 1];
+    char alias[MAX_ALIAS_LEN+1];
     int baudrate;
     unsigned char data_bits;
     unsigned char stop_bits;

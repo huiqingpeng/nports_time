@@ -43,7 +43,7 @@ TASK_ID g_udp_search_tid;
  */
 void app_start(void) {
 	int i,j;
-	log_init(LOG_LEVEL_INFO);
+	log_init(LOG_LEVEL_DEBUG);
 
 	ifconfig("gem0 192.168.8.4");
 
