@@ -14,7 +14,7 @@
 #include "./inc/app_uart.h"
 
 // 内部宏定义
-#define INACTIVITY_TIMEOUT_SECONDS 300 // 5分钟无活动则超时
+#define INACTIVITY_TIMEOUT_SECONDS 3000 // 5分钟无活动则超时
 #define MAX_COMMAND_LEN 1024
 #define HEAD_ID_B1 0xA5
 #define HEAD_ID_B2 0xA5
@@ -888,7 +888,7 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
         case 0x01: // 读取 Monitor Line
             {
                 const unsigned char* data = frame + 4;
-                unsigned char port_count = data[0]; // 第一个字节是端口数量
+                unsigned char port_count = NUM_PORTS; // 第一个字节是端口数量
                 int i;
 
                 LOG_DEBUG("  Action: Read Monitor Line.");
@@ -1103,17 +1103,20 @@ static void handle_change_password_request(int session_index, const unsigned cha
 
     LOG_INFO("ConfigTask: Handling Admin Functions Request (0x07), Sub ID: 0x%02X...", sub_id);
 
-
     switch (sub_id) {
         case 0x00: // Login (登录)
             {
                 const unsigned char* data = frame + 4;
-                unsigned char user_len = data[0];
-                char user_recv[MAX_PASSWORD_LEN];
                 
-                const unsigned char* pass_data = data + 1 + user_len;
+                // --- 解析 User ---
+                unsigned char user_len = data[0];
+                char user_recv[MAX_PASSWORD_LEN + 1];
+                
+                // --- 解析 Password ---
+                // 指针偏移应使用固定的字段长度 (1 + MAX_PASSWORD_LEN)
+                const unsigned char* pass_data = data + 1 + MAX_PASSWORD_LEN;
                 unsigned char pass_len = pass_data[0];
-                char pass_recv[MAX_PASSWORD_LEN];
+                char pass_recv[MAX_PASSWORD_LEN + 1];
 
                 int login_ok = 0;
                 
@@ -1127,9 +1130,9 @@ static void handle_change_password_request(int session_index, const unsigned cha
                     strncpy(pass_recv, (const char*)&pass_data[1], pass_len);
                     pass_recv[pass_len] = '\0';
 
-                    // 调试信息：打印接收到的用户名，密码出于安全考虑通常不打印
+                    // 调试信息
                     LOG_DEBUG("  [RECEIVED] Username: '%s'", user_recv);
-                    LOG_DEBUG("  [RECEIVED] Passrecv: '%s'", pass_recv);
+                    LOG_DEBUG("  [RECEIVED] Password: '%s'", pass_recv);
 
                     semTake(g_config_mutex, WAIT_FOREVER);
                     // 比较用户名和密码
@@ -1154,17 +1157,19 @@ static void handle_change_password_request(int session_index, const unsigned cha
 
                 // 1. 解析旧密码
                 unsigned char old_pass_len = data[0];
-                char old_pass_recv[MAX_PASSWORD_LEN];
-                const unsigned char* new_pass_data = data + 1 + old_pass_len;
+                char old_pass_recv[MAX_PASSWORD_LEN + 1];
+                // 使用固定的字段长度 (1 + MAX_PASSWORD_LEN)
+                const unsigned char* new_pass_data = data + 1 + MAX_PASSWORD_LEN;
 
                 // 2. 解析新密码
                 unsigned char new_pass_len = new_pass_data[0];
-                char new_pass_recv[MAX_PASSWORD_LEN];
-                const unsigned char* retype_pass_data = new_pass_data + 1 + new_pass_len;
+                char new_pass_recv[MAX_PASSWORD_LEN + 1];
+                // 使用固定的字段长度 (1 + MAX_PASSWORD_LEN)
+                const unsigned char* retype_pass_data = new_pass_data + 1 + MAX_PASSWORD_LEN;
                 
                 // 3. 解析重复输入的新密码
                 unsigned char retype_pass_len = retype_pass_data[0];
-                char retype_pass_recv[MAX_PASSWORD_LEN];
+                char retype_pass_recv[MAX_PASSWORD_LEN + 1];
 
                 // 长度校验
                 if (old_pass_len <= MAX_PASSWORD_LEN && new_pass_len <= MAX_PASSWORD_LEN && retype_pass_len <= MAX_PASSWORD_LEN) {
@@ -1176,21 +1181,20 @@ static void handle_change_password_request(int session_index, const unsigned cha
 
                     strncpy(retype_pass_recv, (const char*)&retype_pass_data[1], retype_pass_len);
                     retype_pass_recv[retype_pass_len] = '\0';
-
-                    // 调试信息: 出于安全，不打印密码内容，只打印长度
-                    LOG_DEBUG("  [RECEIVED] Old password length: %d", old_pass_len);
-                    LOG_DEBUG("  [RECEIVED] New password length: %d", new_pass_len);
-                    LOG_DEBUG("  [RECEIVED] Retyped new password length: %d", retype_pass_len);
+                    
+                    LOG_DEBUG("  [RECEIVED] Old password: '%s' (len: %d)", old_pass_recv, old_pass_len);
+                    LOG_DEBUG("  [RECEIVED] New password: '%s' (len: %d)", new_pass_recv, new_pass_len);
+                    LOG_DEBUG("  [RECEIVED] Retyped new password: '%s' (len: %d)", retype_pass_recv, retype_pass_len);
 
 
                     // 逻辑校验
-                    if (strcmp(new_pass_recv, retype_pass_recv) == 0 && new_pass_len > 0) {
+                    if (new_pass_len > 0 && strcmp(new_pass_recv, retype_pass_recv) == 0) {
                         semTake(g_config_mutex, WAIT_FOREVER);
                         // 校验旧密码是否正确
                         if (strcmp(old_pass_recv, g_system_config.device.password) == 0) {
                             // 更新密码
                             strncpy(g_system_config.device.password, new_pass_recv, MAX_PASSWORD_LEN);
-                            g_system_config.device.password[MAX_PASSWORD_LEN] = '\0';
+                            g_system_config.device.password[MAX_PASSWORD_LEN] = '\0'; // 确保字符串结束
                             success = 1;
                             LOG_DEBUG("    - Old password matched. Password will be updated.");
                             // TODO: 调用 dev_config_save() 将新密码持久化到Flash

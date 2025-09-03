@@ -79,7 +79,7 @@ void app_start(void) {
 		g_system_config.channels[i].baudrate = 9600;
 		g_system_config.channels[i].data_bits = 8;
 		g_system_config.channels[i].stop_bits = 1;
-		g_system_config.channels[i].parity = 'N';
+		g_system_config.channels[i].parity = 0x00;
 		for(j=0;j<MAX_CLIENTS_PER_CHANNEL;j++)
 		{
 			g_system_config.channels[i].data_net_info.client_fds[j] = -1;	
