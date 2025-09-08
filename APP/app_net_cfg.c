@@ -7,14 +7,14 @@
  *
  * =====================================================================================
  */
-#include <time.h> // For inactivity timeout check
-#include <stdlib.h> // For atoi, etc.
+#include <time.h>      // For inactivity timeout check
+#include <stdlib.h>    // For atoi, etc.
 #include <arpa/inet.h> // For htonl, ntohl etc.
 #include "./inc/app_com.h"
 #include "./inc/app_uart.h"
 
 // 内部宏定义
-#define INACTIVITY_TIMEOUT_SECONDS 3000 // 5分钟无活动则超时
+#define INACTIVITY_TIMEOUT_SECONDS 30000 // 5分钟无活动则超时
 #define MAX_COMMAND_LEN 1024
 #define HEAD_ID_B1 0xA5
 #define HEAD_ID_B2 0xA5
@@ -38,6 +38,11 @@ static void cleanup_config_connection(int index);
 static int handle_config_client(int index);
 static void process_command_frame(int session_index, const unsigned char* frame, int len);
 
+// --- 新封装的协议处理函数 ---
+static void handle_global_setting_frame(int session_index, ClientSession* session);
+static void handle_serial_port_command(ClientSession* session);
+
+
 // Protocol Handlers
 static void handle_overview_request(int session_index);
 static void handle_basic_settings_request(int session_index, const unsigned char* frame, int len);
@@ -45,6 +50,7 @@ static void handle_network_settings_request(int session_index, const unsigned ch
 static void handle_serial_settings_request(int session_index, const unsigned char* frame, int len);
 static void handle_change_password_request(int session_index, const unsigned char* frame, int len);
 static void handle_monitor_request(int session_index, const unsigned char* frame, int len);
+static void handle_operating_settings_request(int session_index, const unsigned char* frame, int len);
 
 static void send_response(int fd, const unsigned char* data, int len);
 static void send_framed_ack(int fd, unsigned char cmd_id, unsigned char sub_id, int success);
@@ -172,88 +178,114 @@ void ConfigTaskManager(void)
 }
 
 /**
- * @brief 处理数据接收，并从字节流中解析出完整的协议帧
+ * @brief 处理单个串口配置指令 (CONN_TYPE_SET)
+ * @details 直接将接收到的数据缓冲区传递给 app_uart.c 中的 handle_command。
+ */
+static void handle_serial_port_command(ClientSession* session) {
+    
+    ChannelState* p_channel_state = &g_system_config.channels[session->channel_index];
+
+    handle_command(p_channel_state, session->fd, (char*)session->rx_buffer, session->rx_bytes, session->channel_index);
+    
+    // 处理完后清空缓冲区，准备接收下一条指令
+    session->rx_bytes = 0;
+}
+
+/**
+ * @brief 处理全局设备配置指令 (CONN_TYPE_SETTING)
+ * @details 从字节流中解析出带 A5A5 帧头帧尾的完整协议帧，并交给 process_command_frame 处理。
+ */
+static void handle_global_setting_frame(int session_index, ClientSession* session) {
+    while (session->rx_bytes >= MIN_FRAME_SIZE) {
+        int frame_start = -1, frame_end = -1, i;
+
+         // 1. 寻找帧头 (0xA5A5)
+        for (i = 0; i <= session->rx_bytes - 2; i++) {
+            if (session->rx_buffer[i] == HEAD_ID_B1 && session->rx_buffer[i+1] == HEAD_ID_B2) {
+                frame_start = i;
+                break;
+            }
+        }
+
+        if (frame_start == -1) {
+            // 缓冲区中没有帧头，所有数据都可能是无效的，但为了安全，只丢弃部分
+            // 这样可以防止因丢失一个字节而丢弃整个缓冲区
+            session->rx_bytes = 0;
+            break;
+        }
+
+        // 如果帧头不在缓冲区开头，丢弃之前的所有垃圾数据
+        if (frame_start > 0) {
+            memmove(session->rx_buffer, session->rx_buffer + frame_start, session->rx_bytes - frame_start);
+            session->rx_bytes -= frame_start;
+        }
+
+        // 2. 在找到帧头后，寻找帧尾 (0x5A5A)
+        // 帧尾至少在帧头后4个字节 (Cmd+Sub+End)
+        if (session->rx_bytes >= MIN_FRAME_SIZE) {
+            for (i = MIN_FRAME_SIZE - 2; i <= session->rx_bytes - 2; i++) {
+                if (session->rx_buffer[i] == END_ID_B1 && session->rx_buffer[i+1] == END_ID_B2) {
+                    frame_end = i;
+                    break;
+                }
+            }
+        }
+
+        if (frame_end != -1) {
+            // 找到了一个完整的帧
+            int frame_len = frame_end + 2;
+            process_command_frame(session_index, session->rx_buffer, frame_len);
+            // 从缓冲区中移除已处理的帧
+            memmove(session->rx_buffer, session->rx_buffer + frame_len, session->rx_bytes - frame_len);
+            session->rx_bytes -= frame_len;
+        } else {
+            break;
+        }
+    }
+}
+
+
+/**
+ * @brief 接收数据并根据连接类型分发到不同的处理函数
  * @return 1 表示连接存活, 0 表示连接断开
  */
 static int handle_config_client(int index) {
     ClientSession* session = &s_sessions[index];
     
-    // 尝试将新数据读入到会话的接收缓冲区末尾
     int n = recv(session->fd, (char*)session->rx_buffer + session->rx_bytes, 
                  MAX_COMMAND_LEN - session->rx_bytes, 0);
-
+  
     if (n > 0) {
         session->rx_bytes += n;
-
-        // 循环处理缓冲区中的数据，直到找不到完整的帧
-        while (session->rx_bytes >= MIN_FRAME_SIZE) {
-            int frame_start = -1;
-            int frame_end = -1;
-            int i;
-
-            // 1. 寻找帧头 (0xA5A5)
-            for (i = 0; i <= session->rx_bytes - 2; i++) {
-                if (session->rx_buffer[i] == HEAD_ID_B1 && session->rx_buffer[i+1] == HEAD_ID_B2) {
-                    frame_start = i;
-                    break;
-                }
-            }
-
-            if (frame_start == -1) {
-                // 缓冲区中没有帧头，所有数据都可能是无效的，但为了安全，只丢弃部分
-                // 这样可以防止因丢失一个字节而丢弃整个缓冲区
-                session->rx_bytes = 0; // 或者更保守地 memmove
-                break; 
-            }
-
-            // 如果帧头不在缓冲区开头，丢弃之前的所有垃圾数据
-            if (frame_start > 0) {
-                memmove(session->rx_buffer, session->rx_buffer + frame_start, session->rx_bytes - frame_start);
-                session->rx_bytes -= frame_start;
-            }
-
-            // 2. 在找到帧头后，寻找帧尾 (0x5A5A)
-            // 帧尾至少在帧头后4个字节 (Cmd+Sub+End)
-            if (session->rx_bytes >= MIN_FRAME_SIZE) {
-                for (i = MIN_FRAME_SIZE - 2; i <= session->rx_bytes - 2; i++) {
-                    if (session->rx_buffer[i] == END_ID_B1 && session->rx_buffer[i+1] == END_ID_B2) {
-                        frame_end = i;
-                        break;
-                    }
-                }
-            }
-
-            if (frame_end != -1) {
-                // 找到了一个完整的帧
-                int frame_len = frame_end + 2;
-                process_command_frame(index, session->rx_buffer, frame_len);
-                
-                // 从缓冲区中移除已处理的帧
-                memmove(session->rx_buffer, session->rx_buffer + frame_len, session->rx_bytes - frame_len);
-                session->rx_bytes -= frame_len;
-            } else {
-                // 只有帧头没有帧尾，说明数据包不完整，等待下一次recv
-                break;
-            }
+        
+        if (session->type == CONN_TYPE_SET) {
+            LOG_DEBUG("CONN_TYPE_SET");
+            handle_serial_port_command(session);
+        } else if (session->type == CONN_TYPE_SETTING) {
+            LOG_DEBUG("CONN_TYPE_SETTING");
+            handle_global_setting_frame(index, session);
         }
-        return 1; // 连接保持
+        return 1;
     } else if (n == 0) {
-        return 0; // 对方正常关闭
-    } else { // n < 0
+        return 0;
+    } else {
         return (errno == EWOULDBLOCK || errno == EAGAIN) ? 1 : 0;
     }
 }
 
+
 /**
- * @brief 主命令分发器
+ * @brief 主命令分发器 (仅用于全局配置指令)
  */
-static void process_command_frame(int session_index, const unsigned char* frame, int len) {
+static void process_command_frame(int session_index, const unsigned char* frame, int len) { 
+	
     unsigned char command_id = frame[2];
     switch (command_id) {
         case 0x01: handle_overview_request(session_index); break;
         case 0x02: handle_basic_settings_request(session_index, frame, len); break;
         case 0x03: handle_network_settings_request(session_index, frame, len); break;
         case 0x04: handle_serial_settings_request(session_index, frame, len); break;
+        case 0x05: handle_operating_settings_request(session_index, frame, len); break;
         case 0x06: handle_monitor_request(session_index, frame, len); break;
         case 0x07: handle_change_password_request(session_index, frame, len); break;
         default:
@@ -672,7 +704,7 @@ static void handle_network_settings_request(int session_index, const unsigned ch
                 
                 // TODO: 在此调用实际应用网络配置的函数 (e.g., ifconfig)
 		
-	    	    LOG_DEBUG("  [RECEIVED] Auto Report IP: %s", inet_ntoa(g_system_config.device.auto_report_ip));
+//	    	    LOG_DEBUG("  [RECEIVED] Auto Report IP: %s", inet_ntoa(g_system_config.device.auto_report_ip));
                 LOG_DEBUG("  [RECEIVED] Auto Report UDP Port: %d", g_system_config.device.auto_report_udp_port);
                 LOG_DEBUG("  [RECEIVED] Auto Report Period: %d", g_system_config.device.auto_report_period);
                 
@@ -871,6 +903,14 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
     }
 }
 
+
+static void handle_operating_settings_request(int session_index, const unsigned char* frame, int len)
+{
+
+
+
+}
+
 /**
  * @brief 处理 0x06 - 监控请求 (新协议分发器)
  * @details 根据 Sub_ID 将请求分发给不同的监控数据读取逻辑。
@@ -921,7 +961,7 @@ static void handle_monitor_request(int session_index, const unsigned char* frame
                         LOG_DEBUG("  [SENDING] Port %d Monitor Line Data:", port_index);
 
                         response[offset++] = port_index;
-                        response[offset++] = ch->op_mode;
+                        response[offset++] = (unsigned char)ch->op_mode;
                         LOG_DEBUG("    - Op Mode: %d", ch->op_mode);
                         
                         temp_ip = htonl(ch->op_mode_ip1);
@@ -1248,17 +1288,28 @@ static void send_response(int fd, const unsigned char* data, int len) {
     send(fd, (char*)data, len, 0);
 }
 
+/**
+ * @brief 清理一个已断开的配置连接 (全局或单个串口)
+ * @details 关闭socket，从会话列表中移除，并根据情况更新通道状态。
+ * 特别是，当一个通道的所有网络连接（数据和命令）都断开时，
+ * 它会将该通道的物理串口状态（uart_state）更新为 CLOSED。
+ * * @param index 要清理的会话在 s_sessions 数组中的索引
+ */
 static void cleanup_config_connection(int index) 
 {
 	int i=0;
-    if (index < 0 || index >= s_num_active_sessions) return;
+    if (index < 0 || index >= s_num_active_sessions) {
+        LOG_WARN("cleanup_config_connection: Invalid index %d.", index);
+        return;
+    }
 
     ClientSession* session = &s_sessions[index];
     int fd_to_close = session->fd;
 
-    // 如果是特定通道的命令连接，则更新其状态
+    // --- 步骤 1: 如果是特定通道的命令连接，则更新其状态 ---
     if (session->type == CONN_TYPE_SET && session->channel_index >= 0) {
         int channel_index = session->channel_index;
+        
         semTake(g_config_mutex, WAIT_FOREVER);
         ChannelState* channel = &g_system_config.channels[channel_index];
         
@@ -1266,7 +1317,7 @@ static void cleanup_config_connection(int index)
         int client_found = 0;
         for (i = 0; i < channel->cmd_net_info.num_clients; i++) {
             if (channel->cmd_net_info.client_fds[i] == fd_to_close) {
-                // 找到了，用最后一个元素覆盖当前位置
+                // 找到了，用最后一个元素覆盖当前位置，然后缩减数组大小
                 int last_client_index = channel->cmd_net_info.num_clients - 1;
                 channel->cmd_net_info.client_fds[i] = channel->cmd_net_info.client_fds[last_client_index];
                 channel->cmd_net_info.client_fds[last_client_index] = -1; // 清理
@@ -1276,22 +1327,33 @@ static void cleanup_config_connection(int index)
             }
         }
 
-        // 如果是最后一个客户端断开，则更新状态
+        // 如果这是最后一个命令客户端，更新网络状态
         if (client_found && channel->cmd_net_info.num_clients == 0) {
             channel->cmd_net_info.state = NET_STATE_LISTENING;
             LOG_INFO("ConfigTask: Ch %d has no CMD clients left. State -> LISTENING.\n", channel_index);
+            
+            // *** 关键状态维护：检查数据通道是否也已没有客户端 ***
+            if (channel->data_net_info.num_clients == 0) {
+                channel->uart_state = UART_STATE_CLOSED;
+                LOG_INFO("ConfigTask: All network clients for Ch %d disconnected. UART physical state -> CLOSED.\n", channel_index);
+            }
         }
         semGive(g_config_mutex);
     }
 
+    // --- 步骤 2: 关闭 socket 文件描述符 ---
     close(fd_to_close);
     LOG_INFO("ConfigTask: Cleaned up client fd=%d.\n", fd_to_close);
 
-    // 从全局会话数组 s_sessions 中移除
+    // --- 步骤 3: 从全局会话数组 s_sessions 中移除 ---
+    // 通过将最后一个元素移动到当前位置来高效地删除，避免移动整个数组
     int last_index = s_num_active_sessions - 1;
     if (index != last_index) {
         s_sessions[index] = s_sessions[last_index];
     }
+    // 清理最后一个元素的数据
     s_sessions[last_index].fd = -1;
+    s_sessions[last_index].type = 0;
+    s_sessions[last_index].channel_index = -1;
     s_num_active_sessions--;
 }

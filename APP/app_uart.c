@@ -98,6 +98,8 @@ int init_usart(ChannelState *uart_instance, int client_socket, char *buf,
 	/*调用AXI_api设置串口相关寄存器*/
 	axi165502CInit(uart_instance, channel);
 
+	uart_instance->uart_state = UART_STATE_OPENED;
+
 	uart_instance->usart_mcr_dtr = (unsigned char) buf[4];
 
 	uart_instance->usart_mcr_rts = (unsigned char) buf[5];

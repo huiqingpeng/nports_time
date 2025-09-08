@@ -45,7 +45,7 @@ void app_start(void) {
 	int i,j;
 	log_init(LOG_LEVEL_DEBUG);
 
-	ifconfig("gem0 192.168.8.4");
+	ifconfig("gem0 192.168.8.220");
 
 	LOG_INFO("\n\n--- Application Starting ---\n");
 
@@ -80,6 +80,10 @@ void app_start(void) {
 		g_system_config.channels[i].data_bits = 8;
 		g_system_config.channels[i].stop_bits = 1;
 		g_system_config.channels[i].parity = 0x00;
+
+		// *** 状态维护：明确设置所有通道的初始物理状态为关闭 ***
+        g_system_config.channels[i].uart_state = UART_STATE_CLOSED;
+
 		for(j=0;j<MAX_CLIENTS_PER_CHANNEL;j++)
 		{
 			g_system_config.channels[i].data_net_info.client_fds[j] = -1;	

@@ -38,7 +38,52 @@ typedef enum {
 							// 这是一个持久性故障，该通道的网络服务将不可用。
 } NetworkChannelState;
 
-/* --- NEW: Sub-structures for better organization --- */
+
+/**
+ * @brief 定义通道的工作模式 (新添加)
+ * @details 根据用户需求定义的操作模式枚举。
+ */
+typedef enum {
+    OP_MODE_REAL_COM     = 0x01, // Real COM Mode
+    OP_MODE_TCP_SERVER   = 0x03, // TCP Server Mode
+    OP_MODE_TCP_CLIENT   = 0x04, // TCP Client Mode
+    OP_MODE_UDP          = 0x05, // UDP Mode
+    OP_MODE_DISABLED     = 0xFF  // Disabled Mode
+} OperationMode;
+
+/**
+ * @brief 定义数据打包时的分隔符处理方式
+ */
+typedef enum {
+    DELIMITER_PROCESS_NONE          = 0x01, // 不做任何处理 (Do Nothing)
+    DELIMITER_PROCESS_APPEND_DELIM1 = 0x02, // 附加分隔符1 (Delimiter+1)
+    DELIMITER_PROCESS_APPEND_DELIM2 = 0x03, // 附加分隔符2 (Delimiter+2)
+    DELIMITER_PROCESS_STRIP         = 0x04  // 剥离分隔符 (Strip Delimiter)
+} DelimiterProcess;
+
+
+/**
+ * @brief TCP/UDP 远程目标端点定义
+ * @details 包含目标IP、目标端口和本地源端口。
+ */
+typedef struct {
+    unsigned int   destination_ip;           // 目标IP地址 (4 bytes)
+    unsigned short destination_port;         // 目标端口 (2 bytes)
+    unsigned short designated_local_port;    // 指定的本地源端口 (0表示自动分配) (2 bytes)
+} RemoteEndpointSettings;
+
+/**
+ * @brief 数据打包配置
+ * @details 适用于所有网络转发模式 (Real COM, TCP Server/Client, UDP)
+ */
+typedef struct {
+    unsigned short packing_length;           // 打包长度 (0-1024 bytes)
+    unsigned short force_transmit_time_ms;   // 强制发送超时时间 (0-65535 ms)
+    unsigned char  delimiter1;               // 分隔符1 (0x00-0xFF)
+    unsigned char  delimiter2;               // 分隔符2 (0x00-0xFF)
+    DelimiterProcess delimiter_process;      // 分隔符处理方式
+} DataPackingSettings;
+
 
 /**
  * @brief 描述数据通道的网络状态和连接信息
@@ -113,6 +158,9 @@ typedef struct {
 
     /* -- Serial Settings (0x04) -- */
     char alias[MAX_ALIAS_LEN+1];
+    OperationMode  op_mode;
+
+    /* -- 串口物理参数 -- */
     int baudrate;
     unsigned char data_bits;
     unsigned char stop_bits;
@@ -121,7 +169,7 @@ typedef struct {
     unsigned char fifo_enable;
     unsigned char interface_type;
     
-    /* -- 串口控制参数 (来自旧协议，但监控协议仍在使用) -- */
+    /* -- 串口控制参数 -- */
     unsigned char space;
     unsigned char mark;
 	unsigned char usart_mcr_dtr;
@@ -130,11 +178,25 @@ typedef struct {
 	unsigned char IX_on;
 	unsigned char IX_off; //XonXoff
 
+
+    DataPackingSettings packing_settings;
+
+    /* --- 2. TCP/UDP 连接控制参数 (适用于 TCP Server/Client, UDP) --- */
+    unsigned char  tcp_alive_check_time_min; // TCP keep-alive (0-99 min)
+    unsigned short inactivity_time_ms;       // Inactivity timeout (0-65535 ms)
+    unsigned char  ignore_jammed_ip;         // Ignore jammed IP (0: No, 1: Yes)
+ /* --- 3. 模式特定配置 --- */
+    
+    // a) TCP Server / Real COM 模式特定参数
+    unsigned char  allow_driver_control;     // 允许驱动控制 (仅 Real COM/TCP Server)
+    unsigned char  max_connections;          // 最大连接数 (仅 Real COM/TCP Server)
+    unsigned short local_tcp_port;           // 本地监听端口 (TCP Server/Real COM)
+
+    // b) TCP Client / UDP 模式特定参数
+    RemoteEndpointSettings destinations[4];  // 目标端点列表
+    unsigned short local_udp_listen_port;    // UDP模式下的本地监听端口
+
     /* -- Operating Settings -- */
-    unsigned char op_mode;
-	unsigned char tcp_alive_check_time_min;
-	unsigned char max_connections;
-    unsigned short local_tcp_port;
     unsigned int op_mode_ip1;
     unsigned int op_mode_ip2;
     unsigned int op_mode_ip3;
