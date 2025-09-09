@@ -63,14 +63,24 @@ typedef enum {
 
 
 /**
- * @brief TCP/UDP 远程目标端点定义
+ * @brief TCP远程目标端点定义
  * @details 包含目标IP、目标端口和本地源端口。
  */
 typedef struct {
     unsigned int   destination_ip;           // 目标IP地址 (4 bytes)
     unsigned short destination_port;         // 目标端口 (2 bytes)
     unsigned short designated_local_port;    // 指定的本地源端口 (0表示自动分配) (2 bytes)
-} RemoteEndpointSettings;
+} TCP_Client_Mode_Settings;
+
+/**
+ * @brief UDP远程目标端点定义
+ * @details 包含目标IP、目标端口和本地源端口。
+ */
+typedef struct {
+    unsigned int   begin_ip;           // 起始IP地址
+    unsigned int   end_ip;             // 结束IP地址
+    unsigned short port;               // 目标端口
+} UDP_Mode_Settings;
 
 /**
  * @brief 数据打包配置
@@ -191,9 +201,12 @@ typedef struct {
     unsigned char  allow_driver_control;     // 允许驱动控制 (仅 Real COM/TCP Server)
     unsigned char  max_connections;          // 最大连接数 (仅 Real COM/TCP Server)
     unsigned short local_tcp_port;           // 本地监听端口 (TCP Server/Real COM)
+    unsigned short command_port;           // 本地监听端口 (TCP Server/Real COM)
+    unsigned short connection_control;     // 连接控制 (仅 TCP Client Mode)
 
     // b) TCP Client / UDP 模式特定参数
-    RemoteEndpointSettings destinations[4];  // 目标端点列表
+    UDP_Mode_Settings udp_destinations[4];  // udp 模式目标端点列表
+    TCP_Client_Mode_Settings tcp_destinations[4];  // tcp 模式标端点列表
     unsigned short local_udp_listen_port;    // UDP模式下的本地监听端口
 
     /* -- Operating Settings -- */

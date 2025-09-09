@@ -19,6 +19,7 @@ static int read_config_from_flash(SystemConfiguration* config);
 static int write_config_to_flash(const SystemConfiguration* config);
 static const char* uart_state_to_string(UartPhysicalState state);
 static const char* net_state_to_string(NetworkChannelState state);
+static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index);
 
 /* ------------------ Public API Implementations ------------------ */
 
@@ -27,8 +28,7 @@ static const char* net_state_to_string(NetworkChannelState state);
  * @details 依次打印全局设备设置和每个通道的详细配置与状态。
  * 为保证打印数据的一致性，函数会获取配置互斥锁。
  */
-void dev_config_print(void) 
-{
+void dev_config_print(void) {
 	int i;
 	char ip_str[INET_ADDRSTRLEN];
 	char netmask_str[INET_ADDRSTRLEN];
@@ -40,8 +40,7 @@ void dev_config_print(void)
 	LOG_INFO("============================================================");
 
 	// 获取互斥锁，以线程安全的方式读取全局配置
-	if (semTake(g_config_mutex, WAIT_FOREVER) == OK) 
-    {
+	if (semTake(g_config_mutex, WAIT_FOREVER) == OK) {
 		// --- 进入临界区 ---
 
 		/* --- 打印全局设备设置 --- */
@@ -148,8 +147,55 @@ int dev_config_save(void) {
 	return status;
 }
 
-void dev_config_load_defaults(void) 
+/**
+ * @brief (新函数) 初始化单个通道的默认配置参数
+ * @param ch 指向要初始化的通道状态结构体的指针
+ * @param channel_index 当前通道的索引号 (0-based)
+ */
+static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index)
 {
+    int k;
+
+    /* --- 基础和串口配置 --- */
+    snprintf(ch->alias, MAX_ALIAS_LEN, "Port %d", channel_index + 1);
+    ch->baudrate = 9600;
+    ch->data_bits = 8;
+    ch->stop_bits = 1;
+    ch->parity = 0; 
+    ch->flow_ctrl = 0;
+    ch->op_mode = OP_MODE_TCP_CLIENT; // 设置默认工作模式
+
+    /* --- 1. 初始化通用数据打包配置 --- */
+    ch->packing_settings.packing_length = 0;
+    ch->packing_settings.force_transmit_time_ms = 0;
+    ch->packing_settings.delimiter_process = DELIMITER_PROCESS_NONE;
+    ch->packing_settings.delimiter1 = 0x00;
+    ch->packing_settings.delimiter2 = 0x00;
+
+    /* --- 2. 初始化通用连接控制配置 --- */
+    ch->tcp_alive_check_time_min = 0; // 禁用Keep-alive
+    ch->inactivity_time_ms = 0;       // 禁用Inactivity timeout
+    ch->ignore_jammed_ip = 0;         // No
+
+    /* --- 3. 初始化模式特定配置 --- */
+    // a) TCP Server / Real COM 默认值
+    ch->allow_driver_control = 0;
+    ch->max_connections = 4;
+    // 假设 TCP_DATA_PORT_START 在 app_com.h 中定义
+    ch->local_tcp_port = TCP_DATA_PORT_START + channel_index; 
+
+    for (k = 0; k < 4; k++) { // 假设有4个目标端点
+        ch->tcp_destinations[k].destination_ip = 0;
+        ch->tcp_destinations[k].destination_port = 0;
+        ch->tcp_destinations[k].designated_local_port = 0;
+
+        ch->udp_destinations[k].begin_ip = 0;
+        ch->udp_destinations[k].end_ip = 0;
+        ch->udp_destinations[k].port = 0;
+    }
+}
+
+void dev_config_load_defaults(void) {
 	LOG_INFO("Loading factory default settings...\n");
 
 	// 获取互斥锁，以线程安全的方式修改全局配置
@@ -183,16 +229,7 @@ void dev_config_load_defaults(void)
 
 		/* --- 加载每个通道的默认设置 --- */
 		for (i = 0; i < NUM_PORTS; i++) {
-			ChannelState* ch = &g_system_config.channels[i];
-			snprintf(ch->alias, MAX_ALIAS_LEN, "Port %d", i + 1);
-			ch->baudrate = 9600;
-			ch->data_bits = 8;
-			ch->stop_bits = 1;
-			ch->parity = 0; // None
-			ch->flow_ctrl = 0; // None
-			ch->op_mode = 3; // TCP Server Mode
-			ch->max_connections = 4;
-			// ... 其他通道默认值 ...
+			dev_config_init_channel_defaults(&g_system_config.channels[i], i);
 		}
 
 		// --- 退出临界区 ---

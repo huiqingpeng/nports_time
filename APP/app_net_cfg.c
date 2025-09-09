@@ -56,6 +56,14 @@ static void send_response(int fd, const unsigned char* data, int len);
 static void send_framed_ack(int fd, unsigned char cmd_id, unsigned char sub_id, int success);
 static int pack_serial_settings(int channel_index, unsigned char* buffer);
 
+static int set_single_port_mode(unsigned char port_index, unsigned char op_mode, const unsigned char* op_mode_data);
+static int set_all_ports_mode(unsigned char op_mode, const unsigned char* op_mode_data);
+static int validate_and_update_port_mode(ChannelState* channel, unsigned char op_mode, const unsigned char* op_mode_data);
+static void handle_query_op_mode(int session_index, const unsigned char* frame);
+static void handle_read_op_mode(int session_index, const unsigned char* frame);
+static void handle_set_op_mode(int session_index, const unsigned char* frame);
+static void send_op_mode_response(int fd, unsigned char cmd_id, unsigned char sub_id, const unsigned char* data, int data_len);
+
 /* ------------------ Module-level static variables ------------------ */
 static ClientSession s_sessions[MAX_CONFIG_CLIENTS];
 static int s_num_active_sessions = 0;
@@ -841,7 +849,7 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
             }
             break;
 
-        case 0x02: // 【修正】: 写入单个串口设置
+        case 0x02: // 写入单个串口设置
             {
                 const unsigned char* data = frame + 4;
                 int data_offset = 0;
@@ -899,16 +907,470 @@ static void handle_serial_settings_request(int session_index, const unsigned cha
         default:
             LOG_WARN("ConfigTask: Received unknown Sub_ID 0x%02X for Serial Settings.", sub_id);
             send_framed_ack(s_sessions[session_index].fd, 0x04, sub_id, 0); // 失败
+            break; 
+    }
+}
+
+static int pack_operating_mode_params(const ChannelState* channel, unsigned char* buffer)
+{
+    int i,offset = 0;
+    
+    switch(channel->op_mode) {
+        case OP_MODE_REAL_COM:
+            buffer[offset++] = channel->tcp_alive_check_time_min;
+            buffer[offset++] = channel->max_connections;
+            buffer[offset++] = channel->ignore_jammed_ip;
+            buffer[offset++] = channel->allow_driver_control;
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.packing_length);
+            offset += 2;
+            buffer[offset++] = channel->packing_settings.delimiter1;
+            buffer[offset++] = channel->packing_settings.delimiter2;
+            buffer[offset++] = channel->packing_settings.delimiter_process;
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.force_transmit_time_ms);
+            offset += 2;
+            break;
+
+        case OP_MODE_TCP_SERVER:
+            buffer[offset++] = channel->tcp_alive_check_time_min;
+            *(unsigned short*)&buffer[offset] = htons(channel->inactivity_time_ms);
+            offset += 2;
+            buffer[offset++] = channel->max_connections;
+            buffer[offset++] = channel->ignore_jammed_ip;
+            buffer[offset++] = channel->allow_driver_control;
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.packing_length);
+            offset += 2;
+            buffer[offset++] = channel->packing_settings.delimiter1;
+            buffer[offset++] = channel->packing_settings.delimiter2;
+            buffer[offset++] = channel->packing_settings.delimiter_process;
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.force_transmit_time_ms);
+            offset += 2;
+            *(unsigned short*)&buffer[offset] = htons(channel->local_tcp_port);
+            offset += 2;
+            *(unsigned short*)&buffer[offset] = htons(channel->command_port);
+            offset += 2;
+            break;
+            
+        case OP_MODE_TCP_CLIENT:
+            buffer[offset++] = channel->tcp_alive_check_time_min;
+            // Inactivity time
+            *(unsigned short*)&buffer[offset] = htons(channel->inactivity_time_ms);
+            offset += 2;
+            
+            // Ignore jammed IP
+            buffer[offset++] = channel->ignore_jammed_ip;
+            
+            // Packing settings
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.packing_length);
+            offset += 2;
+            buffer[offset++] = channel->packing_settings.delimiter1;
+            buffer[offset++] = channel->packing_settings.delimiter2;
+            buffer[offset++] = channel->packing_settings.delimiter_process;
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.force_transmit_time_ms);
+            offset += 2;
+            
+            // Destination settings (4 sets)
+            for(i = 0; i < 4; i++) {
+                // IP (4 bytes) + Port (2 bytes) = 6 bytes per destination
+                unsigned int ip = htonl(channel->tcp_destinations[i].destination_ip);
+                memcpy(&buffer[offset], &ip, 4);
+                offset += 4;
+                *(unsigned short*)&buffer[offset] = htons(channel->tcp_destinations[i].destination_port);
+                offset += 2;
+            }
+            
+            // Designated local ports (4 sets)
+            for(i = 0; i < 4; i++) {
+                *(unsigned short*)&buffer[offset] = htons(channel->tcp_destinations[i].designated_local_port);
+                offset += 2;
+            }
+            
+            // Connection control
+            buffer[offset++] = channel->connection_control;
+            break;
+            
+        case OP_MODE_UDP:
+            // Packing settings
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.packing_length);
+            offset += 2;
+            buffer[offset++] = channel->packing_settings.delimiter1;
+            buffer[offset++] = channel->packing_settings.delimiter2;
+            buffer[offset++] = channel->packing_settings.delimiter_process;
+            *(unsigned short*)&buffer[offset] = htons(channel->packing_settings.force_transmit_time_ms);
+            offset += 2;
+            
+            // UDP destination settings (4 sets)
+            for(i = 0; i < 4; i++) {
+                // Begin IP (4) + End IP (4) + Port (2) = 10 bytes per destination
+                unsigned int begin_ip = htonl(channel->udp_destinations[i].begin_ip);
+                unsigned int end_ip = htonl(channel->udp_destinations[i].end_ip);
+                memcpy(&buffer[offset], &begin_ip, 4);
+                offset += 4;
+                memcpy(&buffer[offset], &end_ip, 4);
+                offset += 4;
+                *(unsigned short*)&buffer[offset] = htons(channel->udp_destinations[i].port);
+                offset += 2;
+            }
+            
+            // Local listen port
+            *(unsigned short*)&buffer[offset] = htons(channel->local_udp_listen_port);
+            offset += 2;
+            break;
+            
+        case OP_MODE_DISABLED:
+            // No parameters needed for disabled mode
+            break;
+    }
+    
+    return offset;
+}
+
+/**
+ * @brief 处理操作模式相关请求的主函数
+ */
+static void handle_operating_settings_request(int session_index, const unsigned char* frame, int len)
+{
+    unsigned char sub_id = frame[3];
+    
+    LOG_DEBUG("ConfigTask: Handling Operating Settings Request (0x05), Sub ID: 0x%02X, len: %d", 
+             sub_id, len);
+
+    switch(sub_id) {
+        case 0x00:  // 查询串口操作模式
+            handle_query_op_mode(session_index, frame);
+            break;
+
+        case 0x01:  // 读取串口操作模式
+            handle_read_op_mode(session_index, frame);
+            break;
+
+        case 0x02:  // 设置串口操作模式
+            handle_set_op_mode(session_index, frame);
+            break;
+
+        default:
+            LOG_WARN("Unknown operating settings sub command: 0x%02X", sub_id);
             break;
     }
 }
 
-
-static void handle_operating_settings_request(int session_index, const unsigned char* frame, int len)
+/**
+ * @brief 处理查询操作模式请求(0x00)
+ */
+static void handle_query_op_mode(int session_index, const unsigned char* frame)
 {
+    unsigned char response[1024];
+    int i, offset = 0;
+    unsigned char query_type = frame[4];
+    
+    // 帧头
+    response[offset++] = 0xA5;
+    response[offset++] = 0xA5;
+    response[offset++] = 0x05;    // command id
+    response[offset++] = 0x00;    // sub id
+    
+    semTake(g_config_mutex, WAIT_FOREVER);
+    
+    if(query_type == 0xFF) {  // 查询所有端口
+        response[offset++] = query_type;
+        response[offset++] = NUM_PORTS;
+        
+        for(i = 0; i < NUM_PORTS; i++) {
+            const ChannelState* channel = &g_system_config.channels[i];
+            response[offset++] = i + 1;  // 端口序号(从1开始)
+            response[offset++] = channel->op_mode;
+            offset += pack_operating_mode_params(channel, &response[offset]);
+        }
+    }
+    else if(query_type == 0x01) {  // 查询单个端口
+        unsigned char port_index = frame[5];
+        if(port_index < 1 || port_index > NUM_PORTS) {
+            LOG_WARN("Invalid port index: %d", port_index);
+            semGive(g_config_mutex);
+            return;
+        }
+        
+        response[offset++] = query_type;
+        response[offset++] = 1;  // 只返回1个端口
+        
+        const ChannelState* channel = &g_system_config.channels[port_index - 1];
+        response[offset++] = port_index;
+        response[offset++] = channel->op_mode;
+        offset += pack_operating_mode_params(channel, &response[offset]);
+    }
+    
+    semGive(g_config_mutex);
 
+    // 发送响应
+    send_op_mode_response(s_sessions[session_index].fd, 0x05, 0x00, response, offset);
+}
 
+/**
+ * @brief 处理读取操作模式请求(0x01)
+ */
+static void handle_read_op_mode(int session_index, const unsigned char* frame)
+{
+    unsigned char response[1024];
+    int offset = 0;
+    unsigned char port_index = frame[4];
+    unsigned char op_mode = frame[5];
 
+    LOG_DEBUG("Reading port %d operation mode: 0x%02X", port_index, op_mode);
+    
+    if(port_index < 1 || port_index > NUM_PORTS) {
+        LOG_WARN("Invalid port index: %d", port_index);
+        return;
+    }
+
+    // 构造响应
+    response[offset++] = 0xA5;
+    response[offset++] = 0xA5;
+    response[offset++] = 0x05;    // command id
+    response[offset++] = 0x01;    // sub id
+    response[offset++] = port_index;
+    response[offset++] = op_mode;
+
+    semTake(g_config_mutex, WAIT_FOREVER);
+    offset += pack_operating_mode_params(&g_system_config.channels[port_index - 1], 
+                                       &response[offset]);
+    semGive(g_config_mutex);
+
+    // 发送响应
+    send_op_mode_response(s_sessions[session_index].fd, 0x05, 0x01, response, offset);
+}
+
+/**
+ * @brief 处理设置操作模式请求(0x02)
+ */
+static void handle_set_op_mode(int session_index, const unsigned char* frame)
+{
+    unsigned char response[1024];
+    int offset = 0;
+    unsigned char query_type = frame[4];
+    unsigned char op_mode = frame[5];
+    int success = 0;
+
+    LOG_DEBUG("Setting operation mode: query_type=0x%02X, op_mode=0x%02X", 
+             query_type, op_mode);
+
+    if(query_type == 0x01) {  // 设置单个端口
+        unsigned char port_index = frame[6];
+        success = set_single_port_mode(port_index, op_mode, &frame[7]);
+    }
+    else if(query_type == 0xFF) {  // 设置所有端口
+        const unsigned char* op_mode_data = &frame[6];
+        success = set_all_ports_mode(op_mode, op_mode_data);
+    }
+    else {
+        LOG_WARN("Unknown query type: 0x%02X", query_type);
+    }
+
+    // 构造响应
+    response[offset++] = 0xA5;
+    response[offset++] = 0xA5;
+    response[offset++] = 0x05;    // command id
+    response[offset++] = 0x02;    // sub id
+    response[offset++] = query_type;
+    response[offset++] = success ? 0x01 : 0x02;
+
+    // 发送响应
+    send_op_mode_response(s_sessions[session_index].fd, 0x05, 0x02, response, offset);
+}
+
+/**
+ * @brief 发送操作模式响应的通用函数
+ */
+static void send_op_mode_response(int fd, unsigned char cmd_id, unsigned char sub_id, 
+                                const unsigned char* data, int data_len)
+{
+    unsigned char response[1024];
+    int total_len = data_len + 2;  // +2 for end bytes
+    
+    // 复制数据
+    memcpy(response, data, data_len);
+    
+    // 添加帧尾
+    response[data_len] = 0x5A;
+    response[data_len + 1] = 0x5A;
+    
+    // 发送响应
+    send_response(fd, response, total_len);
+}
+/**
+ * @brief 设置单个端口的操作模式
+ * @param port_index 端口索引(1-based)
+ * @param op_mode 操作模式
+ * @param op_mode_data 模式参数数据
+ * @return 1表示成功，0表示失败
+ */
+static int set_single_port_mode(unsigned char port_index, unsigned char op_mode, 
+                              const unsigned char* op_mode_data)
+{
+    int success = 0;
+
+    if(port_index < 1 || port_index > NUM_PORTS) {
+        LOG_WARN("Invalid port index: %d", port_index);
+        return 0;
+    }
+
+    semTake(g_config_mutex, WAIT_FOREVER);
+    
+    ChannelState* channel = &g_system_config.channels[port_index - 1];
+    success = validate_and_update_port_mode(channel, op_mode, op_mode_data);
+    
+    semGive(g_config_mutex);
+
+    LOG_INFO("Set port %d operation mode to 0x%02X: %s", 
+             port_index, op_mode, success ? "Success" : "Failed");
+
+    return success;
+}
+
+/**
+ * @brief 设置所有端口的操作模式
+ * @param op_mode 操作模式
+ * @param op_mode_data 模式参数数据
+ * @return 1表示成功，0表示失败
+ */
+static int set_all_ports_mode(unsigned char op_mode, const unsigned char* op_mode_data)
+{
+    int i, success = 1;
+
+    semTake(g_config_mutex, WAIT_FOREVER);
+    
+    for(i = 0; i < NUM_PORTS; i++) {
+        ChannelState* channel = &g_system_config.channels[i];
+        if(!validate_and_update_port_mode(channel, op_mode, op_mode_data)) {
+            success = 0;
+            LOG_WARN("Failed to set port %d operation mode", i + 1);
+            break;
+        }
+    }
+    
+    semGive(g_config_mutex);
+
+    LOG_INFO("Set all ports operation mode to 0x%02X: %s", 
+             op_mode, success ? "Success" : "Failed");
+
+    return success;
+}
+
+/**
+ * @brief 验证并更新端口的操作模式参数
+ * @param channel 通道状态指针
+ * @param op_mode 操作模式
+ * @param op_mode_data 模式参数数据
+ * @return 1表示成功，0表示失败
+ */
+static int validate_and_update_port_mode(ChannelState* channel, unsigned char op_mode, 
+                                       const unsigned char* op_mode_data)
+{
+    int i, offset = 0;
+    
+    // 保存旧的操作模式，以便在设置失败时恢复
+    unsigned char old_op_mode = channel->op_mode;
+    channel->op_mode = op_mode;
+
+    switch(op_mode) {
+        case OP_MODE_REAL_COM:
+            channel->tcp_alive_check_time_min = op_mode_data[offset++];
+            channel->max_connections = op_mode_data[offset++];
+            channel->ignore_jammed_ip = op_mode_data[offset++];
+            channel->allow_driver_control = op_mode_data[offset++];
+            channel->packing_settings.packing_length = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->packing_settings.delimiter1 = op_mode_data[offset++];
+            channel->packing_settings.delimiter2 = op_mode_data[offset++];
+            channel->packing_settings.delimiter_process = op_mode_data[offset++];
+            channel->packing_settings.force_transmit_time_ms = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            break;
+
+        case OP_MODE_TCP_SERVER:
+            channel->tcp_alive_check_time_min = op_mode_data[offset++];
+            channel->inactivity_time_ms = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->max_connections = op_mode_data[offset++];
+            channel->ignore_jammed_ip = op_mode_data[offset++];
+            channel->allow_driver_control = op_mode_data[offset++];
+            channel->packing_settings.packing_length = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->packing_settings.delimiter1 = op_mode_data[offset++];
+            channel->packing_settings.delimiter2 = op_mode_data[offset++];
+            channel->packing_settings.delimiter_process = op_mode_data[offset++];
+            channel->packing_settings.force_transmit_time_ms = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->local_tcp_port = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->command_port = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            break;
+            
+        case OP_MODE_TCP_CLIENT:
+            channel->tcp_alive_check_time_min = op_mode_data[offset++];
+            channel->inactivity_time_ms = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->ignore_jammed_ip = op_mode_data[offset++];
+            channel->packing_settings.packing_length = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->packing_settings.delimiter1 = op_mode_data[offset++];
+            channel->packing_settings.delimiter2 = op_mode_data[offset++];
+            channel->packing_settings.delimiter_process = op_mode_data[offset++];
+            channel->packing_settings.force_transmit_time_ms = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            
+            // 4组目标地址设置
+            for(i = 0; i < 4; i++) {
+                // IP (4 bytes) + Port (2 bytes) = 6 bytes per destination
+                channel->tcp_destinations[i].destination_ip = ntohl(*(unsigned int*)&op_mode_data[offset]);
+                offset += 4;
+                channel->tcp_destinations[i].destination_port = ntohs(*(unsigned short*)&op_mode_data[offset]);
+                offset += 2;
+            }
+            
+            // 4组本地端口
+            for(i = 0; i < 4; i++) {
+                channel->tcp_destinations[i].designated_local_port = ntohs(*(unsigned short*)&op_mode_data[offset]);
+                offset += 2;
+            }
+            
+            channel->connection_control = op_mode_data[offset++];
+            break;
+            
+        case OP_MODE_UDP:
+            channel->packing_settings.packing_length = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            channel->packing_settings.delimiter1 = op_mode_data[offset++];
+            channel->packing_settings.delimiter2 = op_mode_data[offset++];
+            channel->packing_settings.delimiter_process = op_mode_data[offset++];
+            channel->packing_settings.force_transmit_time_ms = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            
+            // 4组UDP目标地址范围设置
+            for(i = 0; i < 4; i++) {
+                // Begin IP (4) + End IP (4) + Port (2) = 10 bytes per destination
+                channel->udp_destinations[i].begin_ip = ntohl(*(unsigned int*)&op_mode_data[offset]);
+                offset += 4;
+                channel->udp_destinations[i].end_ip = ntohl(*(unsigned int*)&op_mode_data[offset]);
+                offset += 4;
+                channel->udp_destinations[i].port = ntohs(*(unsigned short*)&op_mode_data[offset]);
+                offset += 2;
+            }
+            
+            channel->local_udp_listen_port = ntohs(*(unsigned short*)&op_mode_data[offset]);
+            offset += 2;
+            break;
+            
+        case OP_MODE_DISABLED:
+            // 禁用模式不需要额外参数
+            break;
+
+        default:
+            LOG_WARN("Unknown operation mode: 0x%02X", op_mode);
+            channel->op_mode = old_op_mode;  // 恢复旧的操作模式
+            return 0;
+    }
+
+    return 1;
 }
 
 /**
