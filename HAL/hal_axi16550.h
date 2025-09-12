@@ -5,8 +5,9 @@
 #include <stdint.h>
 #include "hal_com.h"
 
+#define PL_AXI_BASE  0x40000000 
 /* Base addresses and register offsets */
-#define AXI_UART_BASE(n)         (0x41200000 + 0x2000 * n) /* »ùµØÖ· */
+#define AXI_UART_BASE(n)         (0x41200000 + 0x2000 * n) /* ï¿½ï¿½ï¿½ï¿½Ö· */
 #define AXI_16550_INT            (84)
 #define AXI_16550_CLK            (29491200)
 #define AXI_16550_CLK1           (32000000)
@@ -25,7 +26,7 @@
 #define BRAM_KZ                  (0x00000004)
 
 /* Control bit definitions */
-#define LCR_SBRK                  0x40  /* BREAK ÐÅºÅ¿ØÖÆÎ» */
+#define LCR_SBRK                  0x40  /* BREAK ï¿½ÅºÅ¿ï¿½ï¿½ï¿½Î» */
 #define LSR_TX_READY              0x01  /* Data Ready */
 #define LSR_TX_BUFFER_EMPTY       (1<<6) /* Transmit reg empty */
 #define LSR_THER                  (1<<5)
@@ -40,11 +41,24 @@
 #define LSR_TEMT                  0x40  /* Transmitter Empty (FIFO and shift register empty) */
 
 /* XON/XOFF control characters */
-#define XON_CHAR                  0x11  /* XON ×Ö·û£¨DC1£©*/
-#define XOFF_CHAR                 0x13  /* XOFF ×Ö·û£¨DC3£©*/
-#define LSR_THRE_MASK             0x20  /* ·¢ËÍ±£³Ö¼Ä´æÆ÷Îª¿Õ±êÖ¾Î» */
+#define XON_CHAR                  0x11  /* XON ï¿½Ö·ï¿½ï¿½ï¿½DC1ï¿½ï¿½*/
+#define XOFF_CHAR                 0x13  /* XOFF ï¿½Ö·ï¿½ï¿½ï¿½DC3ï¿½ï¿½*/
+#define LSR_THRE_MASK             0x20  /* ï¿½ï¿½ï¿½Í±ï¿½ï¿½Ö¼Ä´ï¿½ï¿½ï¿½Îªï¿½Õ±ï¿½Ö¾Î» */
 
-
+typedef struct usart_info
+{
+	unsigned int  baud_rate;
+	unsigned char data_bit;
+	unsigned char stop_bit;
+	unsigned char parity;
+	unsigned char mark;
+	unsigned char space;
+	unsigned char usart_mcr_dtr;
+	unsigned char usart_mcr_rts;
+	unsigned char usart_crtscts;
+	unsigned char IX_on;
+	unsigned char IX_off; //XonXoff
+} usart_info_t;
 
 /* Function declarations */
 void userAxiCfgWrite(unsigned int channel, unsigned int offset, unsigned int data);
@@ -58,6 +72,8 @@ void axi16550SendStartBreak(unsigned int channel);
 void axi16550SendStopBreak(unsigned int channel);
 void send_xon_xoff_char(uint8_t channel, uint8_t is_xon);
 void axi16550Init(unsigned int channel, unsigned int baud);
-void axi165502CInit(usart_params1_t *uart_instance, int channel);
-
+void axi165502CInit(usart_info_t *uart_instance, int channel);
+void txled(int i, int action);
+void rxled(int i, int action);
+void Portled(int i, int action);
 #endif /* AXI_16550_H_ */

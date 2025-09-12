@@ -6,7 +6,7 @@
 /* ------------------ Application-Specific Constants ------------------ */
 #define NUM_PORTS               16      // 系统支持的串口/通道数量
 #define MAX_CLIENTS_PER_CHANNEL 4 		// 每个通道最多允许4个客户端
-#define RING_BUFFER_SIZE        (8 * 1024) // 8KB 环形缓冲区大小
+#define RING_BUFFER_SIZE        (2048 * 1024) // 8KB 环形缓冲区大小
 #define MAX_CONFIG_CLIENTS      (NUM_PORTS * MAX_CLIENTS_PER_CHANNEL + 1) // 最大配置客户端数量
 
 #define MAX_ALIAS_LEN               19
@@ -188,6 +188,11 @@ typedef struct {
 	unsigned char IX_on;
 	unsigned char IX_off; //XonXoff
 
+    struct {
+        int send_interval_ms;    // 发送时间间隔
+        int packet_size;         // 发送包大小
+    } net_send_cfg;
+
 
     DataPackingSettings packing_settings;
 
@@ -224,6 +229,8 @@ typedef struct {
     /* -- 运行时监控统计 (0x06) -- */
     unsigned int tx_count;
     unsigned int rx_count;
+    unsigned int tx_net;
+    unsigned int rx_net;
     unsigned long long tx_total_count;
     unsigned long long rx_total_count;
     unsigned char dsr_status;

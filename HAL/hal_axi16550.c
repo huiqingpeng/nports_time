@@ -90,18 +90,15 @@ void axi16550BaudInit(unsigned int channel, unsigned int baud)
 void axi16550SendStartBreak(unsigned int channel)
 {
     unsigned char lcr = userAxiCfgRead(channel, AXI_16550_LCR);
-    // 设置 SBRK 位，启动 BREAK
     lcr |= LCR_SBRK;
     userAxiCfgWrite(channel, AXI_16550_LCR, lcr);
 
-    // 保持一段时间（根据需求调整延时）
-    taskDelay(10);  // 假设 taskDelay 单位为系统时钟滴答，延时 10 个滴答
+    taskDelay(10); 
 }
 
 void axi16550SendStopBreak(unsigned int channel)
 {
     unsigned char lcr = userAxiCfgRead(channel, AXI_16550_LCR);
-    // 清除 SBRK 位，停止 BREAK
     lcr &= ~LCR_SBRK;
     userAxiCfgWrite(channel, AXI_16550_LCR, lcr);
 }
@@ -109,9 +106,7 @@ void axi16550SendStopBreak(unsigned int channel)
 void send_xon_xoff_char(uint8_t channel, uint8_t is_xon)
 {
     uint8_t control_char = is_xon ? XON_CHAR : XOFF_CHAR;
-    // 等待发送缓冲区为空
     while (!(userAxiCfgRead(channel, AXI_16550_LSR) & LSR_THRE_MASK));
-    // 写入发送保持寄存器
     userAxiCfgWrite(channel, AXI_16550_THR, control_char);
 }
 
@@ -135,7 +130,7 @@ void axi16550Init(unsigned int channel, unsigned int baud)
     userAxiCfgWrite(channel, AXI_16550_IER, 0x00);
 }
 
-void axi165502CInit(usart_params1_t *uart_instance, int channel)
+void axi165502CInit(usart_info_t *uart_instance, int channel)
 {
     unsigned int div;
     unsigned short dlm, dll;
@@ -184,5 +179,36 @@ int axi16550FIFOInit(int port)
     userAxiCfgWrite(port, AXI_16550_FCR, 0x87);
     userAxiCfgWrite(port, AXI_16550_FCR, 0x81);
     return 0;
+}
+
+
+/* LED control functions */
+void txled(int i, int action)
+{
+	if (i < 0 || i > 15) return;
+
+	uint32_t reg_address = 0x130 + (i * 4);  
+	uint32_t value = (action == 1) ? 1 : 0; 
+
+	sysAxiWriteLong(PL_AXI_BASE + reg_address, value);
+}
+
+void rxled(int i, int action)
+{
+	if (i < 0 || i > 15) return;
+
+	uint32_t reg_address = 0x230 + (i * 4);  
+	uint32_t value = (action == 1) ? 1 : 0;  
+
+	sysAxiWriteLong(PL_AXI_BASE + reg_address, value);
+}
+
+void Portled(int i, int action) {
+	if (i < 0 || i > 15) return;
+
+	uint32_t reg_address = 0x30 + (i * 4);  
+	uint32_t value = (action == 1) ? 1 : 0;  
+
+	sysAxiWriteLong(PL_AXI_BASE + reg_address, value);
 }
 

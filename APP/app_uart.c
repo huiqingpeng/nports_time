@@ -36,35 +36,70 @@ int socket_send_to_middle(int sock_fd, char *buf, int buf_len) {
 	return 0;
 }
 
-int init_usart(ChannelState *uart_instance, int client_socket, char *buf,
-		int buf_len, int channel) {
-	int ret;
+/**
+ * @brief 计算指定波特率的网络发送参数
+ */
+void calculate_send_parameters(ChannelState* channel)
+{
+    int baudrate = channel->baudrate;
+    
+    // 根据波特率设置基本发送间隔
+    if (baudrate <= 9600) {
+        channel->net_send_cfg.send_interval_ms = 10;  // 低速率用较长间隔
+    } else if (baudrate <= 115200) {
+        channel->net_send_cfg.send_interval_ms = 1;     // 中速率用中等间隔
+    } else {
+        channel->net_send_cfg.send_interval_ms = 1;     // 高速率用较短间隔
+    }
 
+    // 计算在这个间隔内会产生多少数据
+    channel->net_send_cfg.packet_size = ((baudrate * channel->net_send_cfg.send_interval_ms) / (BITS_PER_CHAR * 1000))*40/10;
+
+    // 确保包大小在合理范围内
+    if (channel->net_send_cfg.packet_size < MIN_PACKET_SIZE) {
+        channel->net_send_cfg.packet_size = MIN_PACKET_SIZE;
+    } else if (channel->net_send_cfg.packet_size > MAX_PACKET_SIZE) {
+        channel->net_send_cfg.packet_size = MAX_PACKET_SIZE;
+    }
+
+    LOG_WARN("Channel send params - baudrate: %d, interval: %dms, packet size: %d", 
+              baudrate, 
+              channel->net_send_cfg.send_interval_ms,
+              channel->net_send_cfg.packet_size);
+}
+
+
+int init_usart(ChannelState *uart_instance, int client_socket, char *buf, int buf_len, int channel) {
+	int ret;
 	unsigned char stop_bit;
 	unsigned char data_bit;
+    usart_info_t uart_info;
+    memset(&uart_info, 0, sizeof(uart_info));
 
 	char pack_buf[5] = { 0 };
 
-//	uart_buffer_init(channel);
-	/*提取串口参数*/
 
 	/*设置串口波特率*/
 	int baud_rate = bauderate_table[(int) buf[2]];
 	uart_instance->baudrate = baud_rate;
+	uart_info.baud_rate = baud_rate;
 	LOG_DEBUG("baud_rate: %d\n", uart_instance->baudrate);
 
 	/*data bit*/
 	data_bit = ((int) buf[3]) & 0x03;
 	uart_instance->data_bits = data_bit_table[data_bit];
+	uart_info.data_bit = data_bit_table[data_bit];
 	LOG_DEBUG("data_bit: %d\n", uart_instance->data_bits);
 
 	/*stop bit*/
 	stop_bit = ((int) buf[3]) & 0x04;
 	if (stop_bit == 0) {
 		uart_instance->stop_bits = USART_STOP_BIT_1;
+		uart_info.stop_bit = USART_STOP_BIT_1;
 		LOG_DEBUG("stop_bit: %d\n", uart_instance->stop_bits);
 	} else {
 		uart_instance->stop_bits = USART_STOP_BIT_2;
+		uart_info.stop_bit = USART_STOP_BIT_2;
 		LOG_DEBUG("stop_bit: %d\n", uart_instance->stop_bits);
 	}
 
@@ -74,29 +109,34 @@ int init_usart(ChannelState *uart_instance, int client_socket, char *buf,
 	case 0x00:
 		LOG_DEBUG("Parity: None\n");
 		uart_instance->parity = USART_PARITY_NONE;
+		uart_info.parity = USART_PARITY_NONE;
 		break;
 	case 0x08:
 		LOG_DEBUG("Parity: Even\n");
 		uart_instance->parity = USART_PARITY_EVEN;
+		uart_info.parity = USART_PARITY_EVEN;
 		break;
 	case 0x10:
 		LOG_DEBUG("Parity: Odd\n");
 		uart_instance->parity = USART_PARITY_ODD;
+		uart_info.parity = USART_PARITY_ODD;
 		break;
 	case 0x18:
 		LOG_DEBUG("Parity: Mark\n");
 		uart_instance->mark = USART_IOCTL_MARK;
+		uart_info.mark = USART_IOCTL_MARK;
 		break;
 	case 0x20:
 		LOG_DEBUG("Parity: Space\n");
 		uart_instance->space = USART_IOCTL_SPACE;
+		uart_info.space = USART_IOCTL_SPACE;
 		break;
 	default:
 		LOG_ERROR("Unknown parity configuration:%02x \n", last_mask);
 		break;
 	}
 	/*调用AXI_api设置串口相关寄存器*/
-	axi165502CInit(uart_instance, channel);
+	axi165502CInit(&uart_info, channel);
 
 	uart_instance->uart_state = UART_STATE_OPENED;
 
@@ -135,6 +175,8 @@ int init_usart(ChannelState *uart_instance, int client_socket, char *buf,
 	 //	}
 	 * 
 	 * */
+
+	calculate_send_parameters(uart_instance);
 
 	//打包数据
 	pack_buf[0] = buf[0];

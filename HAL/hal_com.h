@@ -26,65 +26,9 @@
 #include <netinet/in.h>
 #include "hal_log.h"
 
-#define VESION_H 1
-#define VESION_M 0
-#define VESION_L 0
-
 #define UART_HW_FIFO_SIZE               (4096)
 
 
-
-#define BACKLOG   8
-#define LED_ON  1
-#define LED_OFF 0
-
-
-
-/* State enumeration for TCP connections */
-typedef enum
-{
-	STATE_INIT = 0,
-	STATE_TCP_OPEN,
-	STATE_TCP_CONN,
-	STATE_TCP_CLOSE,
-	STATE_TCP_WAIT,
-	STATE_RW_DATA,
-	STATE_MAX
-} sock_state_enum;
-
-extern const char *STATE_NAMES[];
-
-/* LED status tracking */
-typedef struct
-{
-	uint16_t tx_count;
-	uint16_t rx_count;
-	uint16_t sample_tick_cnt_tx;
-	uint16_t sample_tick_cnt_rx;
-	uint16_t sample_period_ticks_tx;
-	uint16_t sample_period_ticks_rx;
-	uint8_t tx_led_state;   
-	uint8_t rx_led_state;   
-} uart_led_stat_t;
-
-/* UART parameters */
-typedef struct usart_params1
-{
-	unsigned int  baud_rate;
-	unsigned char data_bit;
-	unsigned char stop_bit;
-	unsigned char parity;
-	unsigned char mark;
-	unsigned char space;
-	unsigned char usart_mcr_dtr;
-	unsigned char usart_mcr_rts;
-	unsigned char usart_crtscts;
-	unsigned char IX_on;
-	unsigned char IX_off; //XonXoff
-} usart_params1_t;
-
-extern const int portdata_array[];
-extern const int portcmd_array[]; 
 
 void sysAxiWriteLong(ULONG address, int32_t data);
 int32_t sysAxiReadLong(ULONG address);

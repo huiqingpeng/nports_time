@@ -36,6 +36,25 @@
 #define BUFFERCOM_SIZE_RX  (65536*2)
 #define BUFFERCOM_SIZE_TX  (65536*2)
 
+// 发送配置相关常量
+#define MIN_BAUDRATE        50      // 最小波特率
+#define MAX_BAUDRATE        1000000 // 最大波特率
+
+#define BITS_PER_CHAR      10      // 1起始位+8数据位+1停止位
+#define MIN_PACKET_SIZE    4       // 最小包大小(字节)
+#define MAX_PACKET_SIZE    (256)    // 最大包大小(字节)
+
+#define TIMER_TICK_US     100     // 定时器tick为100微秒
+#define US_TO_MS          1000    // 微秒转毫秒
+
+
+#ifndef MIN
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#endif
+
+#ifndef MAX
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+#endif
 
 
 /* ------------------ Enumerations and Type Definitions ------------------ */
