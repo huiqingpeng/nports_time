@@ -107,7 +107,7 @@ void log_printf(LogLevel level, const char* file, int line, const char* format, 
     struct tm *t = localtime(&now);
 
     snprintf(log_msg.msg_body, MAX_LOG_MSG_LEN,
-             "[%02d:%02d:%02d] [%s] [%s:%d] %s",
+             "[%02d:%02d:%02d] [%s] [%s:%d] %s\r\n",
              t->tm_hour, t->tm_min, t->tm_sec,
              (level == LOG_LEVEL_DEBUG) ? "DBG" :
              (level == LOG_LEVEL_INFO)  ? "INF" :
