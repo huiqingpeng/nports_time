@@ -377,6 +377,9 @@ void handle_network_settings_request(int session_index, const unsigned char* fra
             {
                 const unsigned char* data = frame + 4;
                 int offset = 0;
+                char ip_str[INET_ADDRSTRLEN];
+                char netmask_str[INET_ADDRSTRLEN];
+                char gateway_str[INET_ADDRSTRLEN];
 		
 		// 打印接收到的信息
                 addr.s_addr = *(unsigned int*)&data[0];
@@ -437,8 +440,20 @@ void handle_network_settings_request(int session_index, const unsigned char* fra
 
                 semGive(g_config_mutex);
                 
-                // TODO: 在此调用实际应用网络配置的函数 (e.g., ifconfig)
-		
+                inet_ntop(AF_INET, &g_system_config.device.ip_address, ip_str, sizeof(ip_str));
+                inet_ntop(AF_INET, &g_system_config.device.netmask, netmask_str, sizeof(netmask_str));
+                inet_ntop(AF_INET, &g_system_config.device.gateway, gateway_str, sizeof(gateway_str));
+        
+                // 调用实际应用网络配置的函数 (e.g., ifconfig)
+                if (dev_network_settings_apply(ip_str, netmask_str,gateway_str) == OK)
+                {
+                    LOG_INFO("Network settings changed. Rebooting device to apply changes.");
+                }   
+                else
+                {
+                    LOG_ERROR("dev_network_settings_apply failed.");
+                }
+
 //	    	    LOG_DEBUG("  [RECEIVED] Auto Report IP: %s", inet_ntoa(g_system_config.device.auto_report_ip));
                 LOG_DEBUG("  [RECEIVED] Auto Report UDP Port: %d", g_system_config.device.auto_report_udp_port);
                 LOG_DEBUG("  [RECEIVED] Auto Report Period: %d", g_system_config.device.auto_report_period);
@@ -711,7 +726,7 @@ static int pack_operating_mode_params(const ChannelState* channel, unsigned char
                 offset += 2;
             }
             
-            // Connection control
+            // Connection control    
             buffer[offset++] = channel->connection_control;
             break;
             

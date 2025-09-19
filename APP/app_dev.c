@@ -8,6 +8,7 @@
  * =====================================================================================
  */
 #include "./inc/app_com.h" // For g_system_config definition
+#include "./inc/app_net_cfg.h" 
 
 /* ------------------ Global Variable Definition ------------------ */
 
@@ -223,7 +224,7 @@ void dev_config_load_defaults(void) {
 		strncpy(dev->user_name, "admin", MAX_PASSWORD_LEN);
 		strncpy(dev->password, "admin", MAX_PASSWORD_LEN);
 		dev->ip_config_mode = 1; // DHCP
-		dev->ip_address = inet_addr("192.168.8.4");
+		dev->ip_address = inet_addr("192.168.8.220");
 		dev->netmask = inet_addr("255.255.255.0");
 		dev->gateway = inet_addr("192.168.8.1");
 
@@ -319,5 +320,64 @@ static const char* net_state_to_string(NetworkChannelState state)
 	default:
 		return "UNKNOWN";
 	}
+}
+
+
+/**
+ * @brief 应用新的网络配置，更新全局配置结构体，并将其保存到Flash。
+ *
+ * @param ip_str 新的IP地址字符串 (e.g., "192.168.1.10")。
+ * @param netmask_str 新的子网掩码字符串 (e.g., "255.255.255.0")。
+ * @param gateway_str 新的网关字符串 (e.g., "192.168.1.1")。
+ * @return int OK 成功, ERROR 失败。
+ */
+int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str)
+{
+    // --- 步骤 1: 调用底层函数，将网络设置应用到操作系统 ---
+    // 假设网络接口名为 "gem0"
+    if (net_cfg_set_network_settings("gem0", ip_str, netmask_str, gateway_str) != OK)
+    {
+        LOG_ERROR("Failed to apply network settings to OS.");
+        return ERROR;
+    }
+
+    LOG_INFO("Network settings successfully applied to OS.");
+
+    // --- 步骤 2: 更新内存中的全局配置变量 g_system_config ---
+    LOG_INFO("Updating in-memory configuration...");
+
+    // 获取配置互斥锁，保证线程安全
+    if (semTake(g_config_mutex, WAIT_FOREVER) == OK)
+    {
+        // --- 进入临界区 ---
+
+        DeviceSettings* dev = &g_system_config.device;
+
+        // 将字符串形式的IP地址转换为无符号整数并存储
+        dev->ip_address = inet_addr(ip_str);
+        dev->netmask = inet_addr(netmask_str);
+        dev->gateway = inet_addr(gateway_str);
+        
+        // 如果需要，也可以在这里更新IP配置模式 (例如，从DHCP变为静态)
+        // dev->ip_config_mode = 0; // 0=Static
+
+        // --- 退出临界区 ---
+        semGive(g_config_mutex);
+    }
+    else
+    {
+        LOG_ERROR("FATAL: Could not take config mutex to update network settings.");
+        return ERROR;
+    }
+
+    // --- 步骤 3: 将更新后的配置保存到 Flash ---
+    if (dev_config_save() != OK)
+    {
+        LOG_ERROR("Failed to save updated network configuration to flash.");
+        return ERROR;
+    }
+
+    LOG_INFO("Network configuration successfully updated and saved.");
+    return OK;
 }
 

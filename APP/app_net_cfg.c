@@ -10,13 +10,17 @@
 #include <time.h>      // For inactivity timeout check
 #include <stdlib.h>    // For atoi, etc.
 #include <arpa/inet.h> // For htonl, ntohl etc.
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "./inc/app_com.h"
 #include "./inc/app_uart.h"
 #include "./inc/app_net_proto.h"
 #include "./inc/app_net.h"
 
+
 // 内部宏定义
-#define INACTIVITY_TIMEOUT_SECONDS 30000 // 5分钟无活动则超时
+#define INACTIVITY_TIMEOUT_SECONDS 300 // 5分钟无活动则超时
 
 
 
@@ -155,6 +159,7 @@ static void handle_serial_port_command(ClientSession* session) {
     
     ChannelState* p_channel_state = &g_system_config.channels[session->channel_index];
 
+    LOG_DEBUG("handle_serial_port_command: fd=%d, channel_index=%d", session->fd, session->channel_index);
     handle_command(p_channel_state, session->fd, (char*)session->rx_buffer, session->rx_bytes, session->channel_index);
     
     // 处理完后清空缓冲区，准备接收下一条指令
@@ -322,7 +327,7 @@ static void cleanup_config_connection(int index)
             channel->cmd_net_info.state = NET_STATE_LISTENING;
             LOG_INFO("ConfigTask: Ch %d has no CMD clients left. State -> LISTENING.\n", channel_index);
             
-            // *** 关键状态维护：检查数据通道是否也已没有客户端 ***
+            // *** 检查数据通道是否也已没有客户端 ***
             if (channel->data_net_info.num_clients == 0) {
                 channel->uart_state = UART_STATE_CLOSED;
                 LOG_INFO("ConfigTask: All network clients for Ch %d disconnected. UART physical state -> CLOSED.\n", channel_index);
@@ -347,3 +352,52 @@ static void cleanup_config_connection(int index)
     s_sessions[last_index].channel_index = -1;
     s_num_active_sessions--;
 }
+
+
+/**
+ * @brief 设置网络接口的IP地址、子网掩码和默认网关。
+ *
+ * @param interface_name 网络接口名称 (例如 "fei0").
+ * @param ip_address 要设置的IP地址 (例如 "192.168.1.10").
+ * @param netmask 要设置的子网掩码 (例如 "255.255.255.0").
+ * @param gateway 要设置的默认网关 (例如 "192.168.1.1").
+ * @return 0 表示成功, -1 表示失败.
+ */
+int net_cfg_set_network_settings(const char *interface_name, const char *ip_address, const char *netmask, const char *gateway)
+{
+    char command_buffer[128];
+
+    /******************************************************************/
+    /* 1. 使用 ifconfig 设置 IP 地址和子网掩码                          */
+    /******************************************************************/
+    // 构造 ifconfig 命令: "interface ip_address netmask xxx.xxx.xxx.xxx"
+    snprintf(command_buffer, sizeof(command_buffer), "%s %s netmask %s", interface_name, ip_address, netmask);
+
+    printf("Executing ifconfig command: '%s'\n", command_buffer);
+    if (ifconfig(command_buffer) != 0) // 假设成功返回 0
+    {
+        perror("ifconfig failed");
+        return -1;
+    }
+    printf("Successfully set IP address and netmask.\n");
+
+
+    /******************************************************************/
+    /* 2. 使用 routec 添加默认网关                                    */
+    /******************************************************************/
+    // 构造 routec 命令: "add default gateway_ip"
+    // 根据 routec 文档, "default" 是默认路由的目标地址
+    snprintf(command_buffer, sizeof(command_buffer), "add default %s", gateway);
+
+    printf("Executing routec command: '%s'\n", command_buffer);
+    if (routec(command_buffer) != 0) // 假设成功返回 0
+    {
+        perror("routec failed to set default gateway");
+        return -1;
+    }
+    printf("Successfully set default gateway.\n");
+
+    return 0;
+}
+
+

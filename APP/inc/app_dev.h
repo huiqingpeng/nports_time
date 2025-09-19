@@ -279,4 +279,14 @@ void dev_reboot(void);
  */
 void dev_config_print(void);
 
+/**
+ * @brief 应用新的网络配置，更新全局配置结构体，并将其保存到Flash。
+ *
+ * @param ip_str 新的IP地址字符串 (e.g., "192.168.1.10")。
+ * @param netmask_str 新的子网掩码字符串 (e.g., "255.255.255.0")。
+ * @param gateway_str 新的网关字符串 (e.g., "192.168.1.1")。
+ * @return int OK 成功, ERROR 失败。
+ */
+int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str);
+
 #endif /* APP_DEV_H */
