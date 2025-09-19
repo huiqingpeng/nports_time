@@ -75,17 +75,18 @@ void app_start(void) {
 	LOG_INFO("Configuration mutex created.\n");
 	dev_config_init();
 
-	dev_network_settings_apply("192.168.8.220", "255.255.255.0", "192.168.8.1");
+	dev_network_settings_apply("192.168.8.220", "255.255.255.0", "192.168.8.1",0);
+	
+	{
+		// lagDevCreate("lag0", 0);
+		// lagPortAttach("lag0", "gem0");
+		// lagPortAttach("lag0", "gem1");
+		// ifconfig("lag0 inet 192.168.8.220 netmask 255.255.255.0");
+	}
 
 	/* ------------------ 2. 初始化通道状态 ------------------ */
 	LOG_INFO("Initializing channel states...\n");
 	for (i = 0; i < NUM_PORTS; i++) {
-		// 设置默认配置
-		g_system_config.channels[i].baudrate = 9600;
-		g_system_config.channels[i].data_bits = 8;
-		g_system_config.channels[i].stop_bits = 1;
-		g_system_config.channels[i].parity = 0x00;
-
 		// *** 状态维护：明确设置所有通道的初始物理状态为关闭 ***
         g_system_config.channels[i].uart_state = UART_STATE_CLOSED;
 
@@ -93,7 +94,6 @@ void app_start(void) {
 		{
 			g_system_config.channels[i].data_net_info.client_fds[j] = -1;	
 		}
-
 		// 初始化环形缓冲区
 		ring_buffer_init(&g_system_config.channels[i].buffer_net,  g_system_config.channels[i].net_buffer_mem,  RING_BUFFER_SIZE);
 		ring_buffer_init(&g_system_config.channels[i].buffer_uart, g_system_config.channels[i].uart_buffer_mem, RING_BUFFER_SIZE);

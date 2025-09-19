@@ -307,19 +307,19 @@ void handle_network_settings_request(int session_index, const unsigned char* fra
                 semTake(g_config_mutex, WAIT_FOREVER);
                 
                 // IP, Netmask, Gateway (4+4+4 bytes)
-                temp_ip = htonl(g_system_config.device.ip_address);
+                temp_ip = htonl(g_system_config.device.ip_address[0]);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
                 addr.s_addr = temp_ip;
                 LOG_DEBUG("  [SENDING] IP Address: %s", inet_ntoa(addr));
 
-                temp_ip = htonl(g_system_config.device.netmask);
+                temp_ip = htonl(g_system_config.device.netmask[0]);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
                 addr.s_addr = temp_ip;
                 LOG_DEBUG("  [SENDING] Netmask: %s", inet_ntoa(addr));
 
-                temp_ip = htonl(g_system_config.device.gateway);
+                temp_ip = htonl(g_system_config.device.gateway[0]);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
                 addr.s_addr = temp_ip;
@@ -330,13 +330,13 @@ void handle_network_settings_request(int session_index, const unsigned char* fra
                 LOG_DEBUG("  [SENDING] IP Config Mode: %s", (g_system_config.device.ip_config_mode == 1) ? "DHCP" : "Static");
 
                 // DNS servers (4+4 bytes)
-                temp_ip = htonl(g_system_config.device.dns_server1);
+                temp_ip = htonl(g_system_config.device.dns_server1[0]);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
                 addr.s_addr = temp_ip;
                 LOG_DEBUG("  [SENDING] DNS Server 1: %s", inet_ntoa(addr));
 
-                temp_ip = htonl(g_system_config.device.dns_server2);
+                temp_ip = htonl(g_system_config.device.dns_server2[0]);
                 memcpy(&response[offset], &temp_ip, 4);
                 offset += 4;
                 addr.s_addr = temp_ip;
@@ -397,28 +397,28 @@ void handle_network_settings_request(int session_index, const unsigned char* fra
                 semTake(g_config_mutex, WAIT_FOREVER);
 
                 // 1. 解析并更新 IP, Netmask, Gateway
-                memcpy(&g_system_config.device.ip_address, &data[offset], 4);
-                g_system_config.device.ip_address = ntohl(g_system_config.device.ip_address);
+                memcpy(&g_system_config.device.ip_address[0], &data[offset], 4);
+                g_system_config.device.ip_address[0] = ntohl(g_system_config.device.ip_address[0]);
                 offset += 4;
 
-                memcpy(&g_system_config.device.netmask, &data[offset], 4);
-                g_system_config.device.netmask = ntohl(g_system_config.device.netmask);
+                memcpy(&g_system_config.device.netmask[0], &data[offset], 4);
+                g_system_config.device.netmask[0] = ntohl(g_system_config.device.netmask[0]);
                 offset += 4;
                 
-                memcpy(&g_system_config.device.gateway, &data[offset], 4);
-                g_system_config.device.gateway = ntohl(g_system_config.device.gateway);
+                memcpy(&g_system_config.device.gateway[0], &data[offset], 4);
+                g_system_config.device.gateway[0] = ntohl(g_system_config.device.gateway[0]);
                 offset += 4;
 
                 // 2. 解析并更新 IP Config Mode
                 g_system_config.device.ip_config_mode = data[offset++];
 
                 // 3. 解析并更新 DNS Servers
-                memcpy(&g_system_config.device.dns_server1, &data[offset], 4);
-                g_system_config.device.dns_server1 = ntohl(g_system_config.device.dns_server1);
+                memcpy(&g_system_config.device.dns_server1[0], &data[offset], 4);
+                g_system_config.device.dns_server1[0] = ntohl(g_system_config.device.dns_server1[0]);
                 offset += 4;
 
-                memcpy(&g_system_config.device.dns_server2, &data[offset], 4);
-                g_system_config.device.dns_server2 = ntohl(g_system_config.device.dns_server2);
+                memcpy(&g_system_config.device.dns_server2[0], &data[offset], 4);
+                g_system_config.device.dns_server2[0] = ntohl(g_system_config.device.dns_server2[0]);
                 offset += 4;
 
                 // 4. 解析并更新 SNMP
@@ -440,12 +440,12 @@ void handle_network_settings_request(int session_index, const unsigned char* fra
 
                 semGive(g_config_mutex);
                 
-                inet_ntop(AF_INET, &g_system_config.device.ip_address, ip_str, sizeof(ip_str));
-                inet_ntop(AF_INET, &g_system_config.device.netmask, netmask_str, sizeof(netmask_str));
-                inet_ntop(AF_INET, &g_system_config.device.gateway, gateway_str, sizeof(gateway_str));
+                inet_ntop(AF_INET, &g_system_config.device.ip_address[0], ip_str, sizeof(ip_str));
+                inet_ntop(AF_INET, &g_system_config.device.netmask[0], netmask_str, sizeof(netmask_str));
+                inet_ntop(AF_INET, &g_system_config.device.gateway[0], gateway_str, sizeof(gateway_str));
         
                 // 调用实际应用网络配置的函数 (e.g., ifconfig)
-                if (dev_network_settings_apply(ip_str, netmask_str,gateway_str) == OK)
+                if (dev_network_settings_apply(ip_str, netmask_str,gateway_str,0) == OK)
                 {
                     LOG_INFO("Network settings changed. Rebooting device to apply changes.");
                 }   

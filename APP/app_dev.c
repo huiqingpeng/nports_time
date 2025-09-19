@@ -9,6 +9,7 @@
  */
 #include "./inc/app_com.h" // For g_system_config definition
 #include "./inc/app_net_cfg.h" 
+#include "./inc/app_dev_cfg.h" 
 
 /* ------------------ Global Variable Definition ------------------ */
 
@@ -30,7 +31,7 @@ static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index
  * 为保证打印数据的一致性，函数会获取配置互斥锁。
  */
 void dev_config_print(void) {
-	int i;
+	int i,j;
 	char ip_str[INET_ADDRSTRLEN];
 	char netmask_str[INET_ADDRSTRLEN];
 	char gateway_str[INET_ADDRSTRLEN];
@@ -60,9 +61,12 @@ void dev_config_print(void) {
 		LOG_INFO("  - Password: %s", dev->password);
 
 		// 转换IP地址为字符串进行打印
-		inet_ntop(AF_INET, &dev->ip_address, ip_str, sizeof(ip_str));
-		inet_ntop(AF_INET, &dev->netmask, netmask_str, sizeof(netmask_str));
-		inet_ntop(AF_INET, &dev->gateway, gateway_str, sizeof(gateway_str));
+		for(j=0;j<NET_NUM;j++){
+			inet_ntop(AF_INET, &dev->ip_address[j], ip_str, sizeof(ip_str));
+			inet_ntop(AF_INET, &dev->netmask[j], netmask_str, sizeof(netmask_str));
+			inet_ntop(AF_INET, &dev->gateway[j], gateway_str, sizeof(gateway_str));
+		}
+
 
 		LOG_INFO("  - IP Config Mode: %s",
 				(dev->ip_config_mode == 1) ? "DHCP" : "Static");
@@ -149,51 +153,89 @@ int dev_config_save(void) {
 }
 
 /**
- * @brief (新函数) 初始化单个通道的默认配置参数
+ * @brief 初始化单个通道的所有默认配置参数
+ * @details 此函数为通道加载所有模式的默认参数，并将初始操作模式
+ * 设置为 Real COM。这确保了所有字段都有一个已知的初始状态。
  * @param ch 指向要初始化的通道状态结构体的指针
  * @param channel_index 当前通道的索引号 (0-based)
  */
 static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index)
 {
-    int k;
+    // --- 0. 清零结构体以确保一个干净的状态 ---
+    memset(ch, 0, sizeof(ChannelState));
 
-    /* --- 基础和串口配置 --- */
+    // --- 设置通道索引和别名 ---
+
     snprintf(ch->alias, MAX_ALIAS_LEN, "Port %d", channel_index + 1);
-    ch->baudrate = 9600;
+
+    // --- 2. 设置默认的操作模式 ---
+    ch->op_mode = DEFAULT_COM_OP_MODE;
+
+    // --- 3. 设置通用的串口和网络参数 ---
+    ch->baudrate = DEFAULT_COM_BAUDRATE;
     ch->data_bits = 8;
     ch->stop_bits = 1;
-    ch->parity = 0; 
+    ch->parity = 0;
     ch->flow_ctrl = 0;
-    ch->op_mode = OP_MODE_TCP_CLIENT; // 设置默认工作模式
+    ch->tcp_alive_check_time_min = DEFAULT_REAL_COM_TCP_ALIVE_CHECK_MIN; // 通用
+    ch->inactivity_time_ms = DEFAULT_TCPSERVER_INACTIVITY_TIME_MS; // 通用
+    ch->ignore_jammed_ip = DEFAULT_REAL_COM_IGNORE_JAMMED_IP; // 通用
 
-    /* --- 1. 初始化通用数据打包配置 --- */
-    ch->packing_settings.packing_length = 0;
-    ch->packing_settings.force_transmit_time_ms = 0;
-    ch->packing_settings.delimiter_process = DELIMITER_PROCESS_NONE;
-    ch->packing_settings.delimiter1 = 0x00;
-    ch->packing_settings.delimiter2 = 0x00;
+    // --- 4. 初始化所有操作模式的特定参数 ---
 
-    /* --- 2. 初始化通用连接控制配置 --- */
-    ch->tcp_alive_check_time_min = 0; // 禁用Keep-alive
-    ch->inactivity_time_ms = 0;       // 禁用Inactivity timeout
-    ch->ignore_jammed_ip = 0;         // No
+    // Real COM 模式参数
+    ch->max_connections = DEFAULT_REAL_COM_MAX_CONNECTIONS;
+    ch->allow_driver_control = DEFAULT_REAL_COM_ALLOW_DRIVER_CONTROL;
 
-    /* --- 3. 初始化模式特定配置 --- */
-    // a) TCP Server / Real COM 默认值
-    ch->allow_driver_control = 0;
-    ch->max_connections = 4;
-    // 假设 TCP_DATA_PORT_START 在 app_com.h 中定义
-    ch->local_tcp_port = TCP_DATA_PORT_START + channel_index; 
+    // TCP Server 模式参数
+    ch->local_tcp_port = DEFAULT_TCPSERVER_LOCAL_TCP_PORT + channel_index;
+    ch->command_port = DEFAULT_TCPSERVER_COMMAND_PORT;
 
-    for (k = 0; k < 4; k++) { // 假设有4个目标端点
-        ch->tcp_destinations[k].destination_ip = 0;
-        ch->tcp_destinations[k].destination_port = 0;
-        ch->tcp_destinations[k].designated_local_port = 0;
+    // TCP Client 模式参数
+    ch->tcp_destinations[0].destination_ip = DEFAULT_TCPCLIENT_DEST_IP1;
+    ch->tcp_destinations[0].destination_port = DEFAULT_TCPCLIENT_DEST_PORT1;
+    ch->tcp_destinations[0].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT1;
 
-        ch->udp_destinations[k].begin_ip = 0;
-        ch->udp_destinations[k].end_ip = 0;
-        ch->udp_destinations[k].port = 0;
-    }
+    ch->tcp_destinations[1].destination_ip = DEFAULT_TCPCLIENT_DEST_IP2;
+    ch->tcp_destinations[1].destination_port = DEFAULT_TCPCLIENT_DEST_PORT2;
+    ch->tcp_destinations[1].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT2;
+
+    ch->tcp_destinations[2].destination_ip = DEFAULT_TCPCLIENT_DEST_IP3;
+    ch->tcp_destinations[2].destination_port = DEFAULT_TCPCLIENT_DEST_PORT3;
+    ch->tcp_destinations[2].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT3;
+
+    ch->tcp_destinations[3].destination_ip = DEFAULT_TCPCLIENT_DEST_IP4;
+    ch->tcp_destinations[3].destination_port = DEFAULT_TCPCLIENT_DEST_PORT4;
+    ch->tcp_destinations[3].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT4;
+
+    ch->connection_control = DEFAULT_TCPCLIENT_CONNECTION_CONTROL;
+	
+
+    // UDP 模式参数
+    ch->udp_destinations[0].begin_ip = DEFAULT_UDP_DEST_BEGIN_IP1;
+    ch->udp_destinations[0].end_ip   = DEFAULT_UDP_DEST_END_IP1;
+    ch->udp_destinations[0].port     = DEFAULT_UDP_DEST_PORT1;
+
+    ch->udp_destinations[1].begin_ip   = DEFAULT_UDP_DEST_BEGIN_IP2;
+    ch->udp_destinations[1].end_ip     = DEFAULT_UDP_DEST_END_IP2;
+	ch->udp_destinations[1].port       = DEFAULT_UDP_DEST_PORT2;
+
+    ch->udp_destinations[2].begin_ip   = DEFAULT_UDP_DEST_BEGIN_IP3;
+    ch->udp_destinations[2].end_ip     = DEFAULT_UDP_DEST_END_IP3;
+	ch->udp_destinations[2].port       = DEFAULT_UDP_DEST_PORT3;
+
+    ch->udp_destinations[2].begin_ip   = DEFAULT_UDP_DEST_BEGIN_IP4;
+    ch->udp_destinations[2].end_ip     = DEFAULT_UDP_DEST_END_IP4;
+	ch->udp_destinations[2].port       = DEFAULT_UDP_DEST_PORT4;
+
+    ch->local_udp_listen_port = DEFAULT_UDP_LOCAL_LISTEN_PORT + channel_index;
+
+    // --- 5. 初始化通用的数据打包参数 ---
+    ch->packing_settings.packing_length = DEFAULT_REAL_COM_PACKING_LENGTH;
+    ch->packing_settings.delimiter1 = DEFAULT_REAL_COM_DELIMITER1;
+    ch->packing_settings.delimiter2 = DEFAULT_REAL_COM_DELIMITER2;
+    ch->packing_settings.delimiter_process = DEFAULT_REAL_COM_DELIMITER_PROCESS;
+    ch->packing_settings.force_transmit_time_ms = DEFAULT_REAL_COM_FORCE_TRANSMIT_TIME;
 }
 
 void dev_config_load_defaults(void) {
@@ -202,6 +244,7 @@ void dev_config_load_defaults(void) {
 	// 获取互斥锁，以线程安全的方式修改全局配置
 	if (semTake(g_config_mutex, WAIT_FOREVER) == OK) {
 		int i = 0;
+		int j;
 		// --- 进入临界区 ---
 
 		// 清空整个结构体
@@ -209,14 +252,16 @@ void dev_config_load_defaults(void) {
 
 		/* --- 加载全局设备默认设置 --- */
 		DeviceSettings* dev = &g_system_config.device;
-		strncpy(dev->model_name, "WQ-NPORTS-16", MAX_MODEL_NAME_LEN);
+		strncpy(dev->model_name, "WQ-QPORTS-16", MAX_MODEL_NAME_LEN);
 		// TODO: 从硬件读取真实的MAC地址
 		unsigned char default_mac[6] = { 0x00, 0x0E, 0xC6, 0x01, 0x02, 0x03 };
 		memcpy(dev->mac_address, default_mac, 6);
 		dev->serial_no = 10001;
+
 		dev->firmware_version[0] = 1;
 		dev->firmware_version[1] = 2;
 		dev->firmware_version[2] = 3;
+
 		dev->hardware_version[0] = 1;
 		dev->hardware_version[1] = 0;
 		dev->hardware_version[2] = 0;
@@ -224,9 +269,13 @@ void dev_config_load_defaults(void) {
 		strncpy(dev->user_name, "admin", MAX_PASSWORD_LEN);
 		strncpy(dev->password, "admin", MAX_PASSWORD_LEN);
 		dev->ip_config_mode = 1; // DHCP
-		dev->ip_address = inet_addr("192.168.8.220");
-		dev->netmask = inet_addr("255.255.255.0");
-		dev->gateway = inet_addr("192.168.8.1");
+		
+		for(j=0;j<NET_NUM;j++){
+			dev->ip_address[j] = inet_addr("192.168.8.220");
+			dev->netmask[j] = inet_addr("255.255.255.0");
+			dev->gateway[j] = inet_addr("192.168.8.1");
+		}
+
 
 		/* --- 加载每个通道的默认设置 --- */
 		for (i = 0; i < NUM_PORTS; i++) {
@@ -331,15 +380,35 @@ static const char* net_state_to_string(NetworkChannelState state)
  * @param gateway_str 新的网关字符串 (e.g., "192.168.1.1")。
  * @return int OK 成功, ERROR 失败。
  */
-int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str)
+int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str, const char index)
 {
     // --- 步骤 1: 调用底层函数，将网络设置应用到操作系统 ---
     // 假设网络接口名为 "gem0"
-    if (net_cfg_set_network_settings("gem0", ip_str, netmask_str, gateway_str) != OK)
-    {
-        LOG_ERROR("Failed to apply network settings to OS.");
-        return ERROR;
-    }
+	if(0 > index || index >= NET_NUM){
+		LOG_ERROR("The index of network interface is invalid.");
+		return ERROR;
+	}
+	
+	switch (index)
+	{
+	case 0x00:
+		if (net_cfg_set_network_settings("gem0", ip_str, netmask_str, gateway_str) != OK)
+    	{
+			LOG_ERROR("Failed to apply network settings to OS.");
+			return ERROR;
+   		}
+		break;
+	case 0x01:
+		if (net_cfg_set_network_settings("gem1", ip_str, netmask_str, gateway_str) != OK)
+    	{
+			LOG_ERROR("Failed to apply network settings to OS.");
+			return ERROR;
+   		}
+		break;
+	default:
+		break;
+	}
+
 
     LOG_INFO("Network settings successfully applied to OS.");
 
@@ -354,9 +423,9 @@ int dev_network_settings_apply(const char *ip_str, const char *netmask_str, cons
         DeviceSettings* dev = &g_system_config.device;
 
         // 将字符串形式的IP地址转换为无符号整数并存储
-        dev->ip_address = inet_addr(ip_str);
-        dev->netmask = inet_addr(netmask_str);
-        dev->gateway = inet_addr(gateway_str);
+        dev->ip_address[index] = inet_addr(ip_str);
+        dev->netmask[index] = inet_addr(netmask_str);
+        dev->gateway[index] = inet_addr(gateway_str);
         
         // 如果需要，也可以在这里更新IP配置模式 (例如，从DHCP变为静态)
         // dev->ip_config_mode = 0; // 0=Static

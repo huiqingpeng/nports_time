@@ -2,6 +2,7 @@
 #define APP_DEV_H
 
 #include "app_com.h" // 包含基础类型定义
+#include "app_dev_cfg.h" // 包含基础类型定义
 
 /* ------------------ Application-Specific Constants ------------------ */
 #define NUM_PORTS               16      // 系统支持的串口/通道数量
@@ -138,12 +139,12 @@ typedef struct {
     unsigned int  time_server;   // Time Server IP Address
 
     /* -- Network Settings (0x03) -- */
-    unsigned int ip_address;
-    unsigned int netmask;
-    unsigned int gateway;
+    unsigned int ip_address[NET_NUM];
+    unsigned int netmask[NET_NUM];
+    unsigned int gateway[NET_NUM];
     unsigned char ip_config_mode; // 0=Static, 1=DHCP, etc.
-    unsigned int dns_server1;
-    unsigned int dns_server2;
+    unsigned int dns_server1[NET_NUM];
+    unsigned int dns_server2[NET_NUM];
     
     /* -- SNMP and IP Report Settings (from 0x03) -- */
     unsigned char  snmp_enabled;
@@ -287,6 +288,6 @@ void dev_config_print(void);
  * @param gateway_str 新的网关字符串 (e.g., "192.168.1.1")。
  * @return int OK 成功, ERROR 失败。
  */
-int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str);
+int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str, const char index);
 
 #endif /* APP_DEV_H */
