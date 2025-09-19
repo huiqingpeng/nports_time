@@ -12,6 +12,8 @@
 
 #include "./inc/app_com.h"
 #include "./inc/app_udp_search.h"
+#include "./inc/app_net_cfg.h"
+
 
 /* ------------------ Task Configuration Constants ------------------ */
 // 任务优先级 (数字越小，优先级越高)
@@ -45,7 +47,7 @@ void app_start(void) {
 	int i,j;
 	log_init(LOG_LEVEL_DEBUG);
 
-	ifconfig("gem0 192.168.8.220");
+
 
 	LOG_INFO("\n\n--- Application Starting ---\n");
 
@@ -72,6 +74,9 @@ void app_start(void) {
 	}
 	LOG_INFO("Configuration mutex created.\n");
 	dev_config_init();
+
+	dev_network_settings_apply("192.168.8.220", "255.255.255.0", "192.168.8.1");
+
 	/* ------------------ 2. 初始化通道状态 ------------------ */
 	LOG_INFO("Initializing channel states...\n");
 	for (i = 0; i < NUM_PORTS; i++) {
