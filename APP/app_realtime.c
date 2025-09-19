@@ -19,6 +19,9 @@
 
 #define TX_CHUNK_SIZE (UART_HW_FIFO_SIZE / 2)
 
+ // LED每次触发后点亮的持续时间（单位：中频任务周期，即50ms）
+#define LED_ON_DURATION_TICKS    (50)      
+
 /* ------------------ Private Function Prototypes ------------------ */
 static void high_precision_timer_isr(void *arg);
 static int setup_high_precision_timer(void);
@@ -36,6 +39,11 @@ static void cleanup_data_connection(int channel_index,
 /* ------------------ Module-level static variables ------------------ */
 static SEM_ID s_timer_sync_sem; // 用于定时器ISR与任务同步的二进制信号量
 static volatile uint32_t timer_cnt = 0;
+
+static uint32_t s_last_rx_count[NUM_PORTS] = {0};
+static uint32_t s_last_tx_count[NUM_PORTS] = {0};
+static uint8_t s_rx_led_timer[NUM_PORTS] = {0};
+static uint8_t s_tx_led_timer[NUM_PORTS] = {0};
 /* ------------------ Global Variable Definitions ------------------ */
 
 
@@ -56,11 +64,6 @@ static void high_precision_timer_isr(void *arg) {
 	// ISR中唯一要做的事：释放信号量唤醒实时任务
 	timer_cnt++;
 	semGive(s_timer_sync_sem);
-}
-static void run_low_frequency_tasks(void) 
-{
-    LOG_ERROR("rx_count= %d, tx_count= %d", g_system_config.channels[0].rx_count,g_system_config.channels[0].tx_count);
-    LOG_ERROR("rx_net  = %d, tx_net  = %d", g_system_config.channels[0].rx_net,g_system_config.channels[0].tx_net);
 }
 
 /**
@@ -217,12 +220,74 @@ static void run_high_frequency_tasks(void)
 
 }
 
+
+/**
+ * @brief 新增：处理所有通道的LED闪烁逻辑
+ * @details 基于可重入单稳态触发器模型。
+ * 检测到数据活动时，重置计时器；计时器大于0则点亮LED。
+ */
+static void handle_led_blinking(void)
+{
+    int i;
+    for (i = 0; i < NUM_PORTS; i++) {
+        ChannelState* channel = &g_system_config.channels[i];
+
+        // --- 处理 RX LED ---
+        // 1. 检测数据接收活动
+        if (channel->rx_count > s_last_rx_count[i]) {
+            s_rx_led_timer[i] = LED_ON_DURATION_TICKS; // 重置点亮计时器
+            s_last_rx_count[i] = channel->rx_count;   // 更新上次的计数值
+        }
+
+        // 2. 根据计时器更新LED状态
+        if (s_rx_led_timer[i] > 0) {
+            rxled(i, 1); // 点亮 RX LED
+            s_rx_led_timer[i]--; // 计时器递减LOG_LEVEL_DEBUG
+        } else {
+            rxled(i, 0); // 关闭 RX LED
+        }
+
+        // --- 处理 TX LED ---
+        // 1. 检测数据发送活动
+        if (channel->tx_count > s_last_tx_count[i]) {
+            s_tx_led_timer[i] = LED_ON_DURATION_TICKS; // 重置点亮计时器
+            s_last_tx_count[i] = channel->tx_count;   // 更新上次的计数值
+        }
+
+        // 2. 根据计时器更新LED状态
+        if (s_tx_led_timer[i] > 0) {
+            txled(i, 1); // 点亮 TX LED
+            s_tx_led_timer[i]--; // 计时器递减
+        } else {
+            txled(i, 0); // 关闭 TX LED
+        }
+    }
+}
+
 /**
  * @brief 执行所有中频（每1ms）任务
  */
 static void run_medium_frequency_tasks(void) {
     NetworkSchedulerTask();
+    handle_led_blinking();
 }
+
+
+static void run_low_frequency_tasks(void) 
+{
+    int i;
+    for (i = 0; i < NUM_PORTS; i++) {
+        ChannelState* channel = &g_system_config.channels[i];
+
+        // 只处理有客户端连接且串口已打开的通道
+        if (channel->data_net_info.num_clients > 0 && channel->uart_state == UART_STATE_OPENED) 
+        {
+            LOG_INFO("[%d]:rx_count= %d, tx_count= %d", i, channel->rx_count, channel->tx_count);
+            LOG_INFO("[%d]:rx_net  = %d, tx_net  = %d", i, channel->rx_net,   channel->tx_net);
+        }
+    }
+}
+
 
 /**
  * @brief 设置并启动高精度硬件定时器
