@@ -74,6 +74,7 @@ void app_start(void) {
 	}
 	LOG_INFO("Configuration mutex created.\n");
 	dev_config_init();
+	dev_net_init();
 
 	dev_network_settings_apply("192.168.8.220", "255.255.255.0", "192.168.8.1",0);
 	

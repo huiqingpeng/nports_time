@@ -11,16 +11,7 @@ static void set_tcp_keepalive(int sock_fd, int keepidle, int keepintl,
 		int keepcnt);
 
 /* ------------------ Port Mapping Table ------------------ */
-static PortMapping g_port_mappings[NUM_PORTS] = {
-    { 0,  950, 966, -1, -1 }, { 1,  951, 967, -1, -1 },
-    { 2,  952, 968, -1, -1 }, { 3,  953, 969, -1, -1 },
-    { 4,  954, 970, -1, -1 }, { 5,  955, 971, -1, -1 },
-    { 6,  956, 972, -1, -1 }, { 7,  957, 973, -1, -1 },
-    { 8,  958, 974, -1, -1 }, { 9,  959, 975, -1, -1 },
-    { 10, 960, 976, -1, -1 }, { 11, 961, 977, -1, -1 },
-    { 12, 962, 978, -1, -1 }, { 13, 963, 979, -1, -1 },
-    { 14, 964, 980, -1, -1 }, { 15, 965, 981, -1, -1 }
-};
+PortMapping g_port_mappings[NUM_PORTS];
 
 static int g_setting_listen_fd = -1;
 
@@ -34,7 +25,6 @@ void ConnectionManagerTask(void)
 {
     int i;
     LOG_INFO("ConnectionManagerTask: Starting...\n");
-
     /* ------------------ 1. 使用映射表初始化所有监听端口 ------------------ */
     for (i = 0; i < NUM_PORTS; i++) {
         g_port_mappings[i].data_listen_fd = setup_listening_socket(g_port_mappings[i].data_port);
@@ -47,9 +37,9 @@ void ConnectionManagerTask(void)
         semGive(g_config_mutex);
 
 
-        g_port_mappings[i].set_listen_fd = setup_listening_socket(g_port_mappings[i].set_port);
+        g_port_mappings[i].command_listen_fd = setup_listening_socket(g_port_mappings[i].command_port);
         semTake(g_config_mutex, WAIT_FOREVER);
-        if (g_port_mappings[i].set_listen_fd < 0) {
+        if (g_port_mappings[i].command_listen_fd < 0) {
             /* --- STATE UPDATE --- */
             g_system_config.channels[i].cmd_net_info.state = NET_STATE_ERROR;
         } else {
@@ -58,6 +48,16 @@ void ConnectionManagerTask(void)
         }
         semGive(g_config_mutex);
 
+        g_port_mappings[i].local_tcp_listen_fd = setup_listening_socket(g_port_mappings[i].local_tcp_port);
+        semTake(g_config_mutex, WAIT_FOREVER);
+        if (g_port_mappings[i].local_tcp_listen_fd < 0) {
+            /* --- STATE UPDATE --- */
+            g_system_config.channels[i].local_net_info.state = NET_STATE_ERROR;
+        } else {
+            /* --- STATE UPDATE --- */
+            g_system_config.channels[i].local_net_info.state = NET_STATE_LISTENING;
+        }
+        semGive(g_config_mutex);
     }
 
     g_setting_listen_fd = setup_listening_socket(TCP_SETTING_PORT);
@@ -81,8 +81,8 @@ void ConnectionManagerTask(void)
             FD_SET(g_port_mappings[i].data_listen_fd, &read_fds);
             if (g_port_mappings[i].data_listen_fd > max_fd) max_fd = g_port_mappings[i].data_listen_fd;
 
-            FD_SET(g_port_mappings[i].set_listen_fd, &read_fds);
-            if (g_port_mappings[i].set_listen_fd > max_fd) max_fd = g_port_mappings[i].set_listen_fd;
+            FD_SET(g_port_mappings[i].command_listen_fd, &read_fds);
+            if (g_port_mappings[i].command_listen_fd > max_fd) max_fd = g_port_mappings[i].command_listen_fd;
         }
         FD_SET(g_setting_listen_fd, &read_fds);
         if (g_setting_listen_fd > max_fd) max_fd = g_setting_listen_fd;
@@ -120,8 +120,8 @@ void ConnectionManagerTask(void)
             }
 
             // 检查串口配置通道
-            if (FD_ISSET(g_port_mappings[i].set_listen_fd, &read_fds)) {
-                int client_fd = accept(g_port_mappings[i].set_listen_fd, NULL, NULL);
+            if (FD_ISSET(g_port_mappings[i].command_listen_fd, &read_fds)) {
+                int client_fd = accept(g_port_mappings[i].command_listen_fd, NULL, NULL);
                 if (client_fd >= 0) {
                     NewConnectionMsg msg;
                     msg.type = CONN_TYPE_SET;

@@ -75,11 +75,13 @@ typedef enum {
 typedef struct {
     int channel_index;      // 串口通道号
     int data_port;          // 对应的数据端口
-    int set_port;           // 对应的配置端口
+    int command_port;           // 对应的配置端口
+    int local_tcp_port;           // 对应的本地TCP端口
 
     /* ---- 以下字段在运行时填充 ---- */
     int data_listen_fd;     // 数据端口的监听socket fd
-    int set_listen_fd;      // 配置端口的监听socket fd
+    int command_listen_fd;      // 配置端口的监听socket fd
+    int local_tcp_listen_fd;      // 本地TCP端口的监听socket fd
 } PortMapping;
 
 /**
@@ -105,6 +107,7 @@ extern SEM_ID g_config_mutex;
 
 // 主状态数组：包含所有16个通道的状态
 extern SystemConfiguration g_system_config;
+extern PortMapping g_port_mappings[NUM_PORTS];
 
 extern void ConnectionManagerTask(void);
 extern void ConfigTaskManager(void);

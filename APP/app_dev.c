@@ -21,7 +21,8 @@ static int read_config_from_flash(SystemConfiguration* config);
 static int write_config_to_flash(const SystemConfiguration* config);
 static const char* uart_state_to_string(UartPhysicalState state);
 static const char* net_state_to_string(NetworkChannelState state);
-static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index);
+static void dev_config_init_channel_defaults(ChannelState* ch,
+		int channel_index);
 
 /* ------------------ Public API Implementations ------------------ */
 
@@ -31,7 +32,7 @@ static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index
  * 为保证打印数据的一致性，函数会获取配置互斥锁。
  */
 void dev_config_print(void) {
-	int i,j;
+	int i, j;
 	char ip_str[INET_ADDRSTRLEN];
 	char netmask_str[INET_ADDRSTRLEN];
 	char gateway_str[INET_ADDRSTRLEN];
@@ -61,12 +62,13 @@ void dev_config_print(void) {
 		LOG_INFO("  - Password: %s", dev->password);
 
 		// 转换IP地址为字符串进行打印
-		for(j=0;j<NET_NUM;j++){
+		for (j = 0; j < NET_NUM; j++) {
 			inet_ntop(AF_INET, &dev->ip_address[j], ip_str, sizeof(ip_str));
-			inet_ntop(AF_INET, &dev->netmask[j], netmask_str, sizeof(netmask_str));
-			inet_ntop(AF_INET, &dev->gateway[j], gateway_str, sizeof(gateway_str));
+			inet_ntop(AF_INET, &dev->netmask[j], netmask_str,
+					sizeof(netmask_str));
+			inet_ntop(AF_INET, &dev->gateway[j], gateway_str,
+					sizeof(gateway_str));
 		}
-
 
 		LOG_INFO("  - IP Config Mode: %s",
 				(dev->ip_config_mode == 1) ? "DHCP" : "Static");
@@ -130,6 +132,17 @@ int dev_config_init(void) {
 	}
 }
 
+int dev_net_init(void) {
+	int i;
+	for (i = 0; i < NUM_PORTS; i++) {
+		g_port_mappings[i].channel_index = i;
+		g_port_mappings[i].local_tcp_listen_fd = -1;
+		g_port_mappings[i].local_tcp_port = g_system_config.channels[i].local_tcp_port;
+		g_port_mappings[i].data_port = TCP_DATA_PORT_START + 1;
+		g_port_mappings[i].command_port = g_system_config.channels[i].command_port;
+	}
+}
+
 int dev_config_save(void) {
 	int status;
 	LOG_INFO("Attempting to save configuration to flash...\n");
@@ -159,83 +172,88 @@ int dev_config_save(void) {
  * @param ch 指向要初始化的通道状态结构体的指针
  * @param channel_index 当前通道的索引号 (0-based)
  */
-static void dev_config_init_channel_defaults(ChannelState* ch, int channel_index)
-{
-    // --- 0. 清零结构体以确保一个干净的状态 ---
-    memset(ch, 0, sizeof(ChannelState));
+static void dev_config_init_channel_defaults(ChannelState* ch,
+		int channel_index) {
+	// --- 0. 清零结构体以确保一个干净的状态 ---
+	memset(ch, 0, sizeof(ChannelState));
 
-    // --- 设置通道索引和别名 ---
+	// --- 设置通道索引和别名 ---
 
-    snprintf(ch->alias, MAX_ALIAS_LEN, "Port %d", channel_index + 1);
+	snprintf(ch->alias, MAX_ALIAS_LEN, "Port %d", channel_index + 1);
 
-    // --- 2. 设置默认的操作模式 ---
-    ch->op_mode = DEFAULT_COM_OP_MODE;
+	// --- 2. 设置默认的操作模式 ---
+	ch->op_mode = DEFAULT_COM_OP_MODE;
+	ch->interface_type = DEFAULT_COM_INTERFACE_TYPE;
 
-    // --- 3. 设置通用的串口和网络参数 ---
-    ch->baudrate = DEFAULT_COM_BAUDRATE;
-    ch->data_bits = 8;
-    ch->stop_bits = 1;
-    ch->parity = 0;
-    ch->flow_ctrl = 0;
-    ch->tcp_alive_check_time_min = DEFAULT_REAL_COM_TCP_ALIVE_CHECK_MIN; // 通用
-    ch->inactivity_time_ms = DEFAULT_TCPSERVER_INACTIVITY_TIME_MS; // 通用
-    ch->ignore_jammed_ip = DEFAULT_REAL_COM_IGNORE_JAMMED_IP; // 通用
+	// --- 3. 设置通用的串口和网络参数 ---
+	ch->baudrate = DEFAULT_COM_BAUDRATE;
+	ch->data_bits = 8;
+	ch->stop_bits = 1;
+	ch->parity = 0;
+	ch->flow_ctrl = 0;
+	ch->tcp_alive_check_time_min = DEFAULT_REAL_COM_TCP_ALIVE_CHECK_MIN; // 通用
+	ch->inactivity_time_ms = DEFAULT_TCPSERVER_INACTIVITY_TIME_MS; // 通用
+	ch->ignore_jammed_ip = DEFAULT_REAL_COM_IGNORE_JAMMED_IP; // 通用
 
-    // --- 4. 初始化所有操作模式的特定参数 ---
+	// --- 4. 初始化所有操作模式的特定参数 ---
 
-    // Real COM 模式参数
-    ch->max_connections = DEFAULT_REAL_COM_MAX_CONNECTIONS;
-    ch->allow_driver_control = DEFAULT_REAL_COM_ALLOW_DRIVER_CONTROL;
+	// Real COM 模式参数
+	ch->max_connections = DEFAULT_REAL_COM_MAX_CONNECTIONS;
+	ch->allow_driver_control = DEFAULT_REAL_COM_ALLOW_DRIVER_CONTROL;
 
-    // TCP Server 模式参数
-    ch->local_tcp_port = DEFAULT_TCPSERVER_LOCAL_TCP_PORT + channel_index;
-    ch->command_port = DEFAULT_TCPSERVER_COMMAND_PORT;
+	// TCP Server 模式参数
+	ch->local_tcp_port = DEFAULT_TCPSERVER_LOCAL_TCP_PORT + channel_index;
+	ch->command_port = DEFAULT_TCPSERVER_COMMAND_PORT + channel_index;
 
-    // TCP Client 模式参数
-    ch->tcp_destinations[0].destination_ip = DEFAULT_TCPCLIENT_DEST_IP1;
-    ch->tcp_destinations[0].destination_port = DEFAULT_TCPCLIENT_DEST_PORT1;
-    ch->tcp_destinations[0].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT1;
+	// TCP Client 模式参数
+	ch->tcp_destinations[0].destination_ip = DEFAULT_TCPCLIENT_DEST_IP1;
+	ch->tcp_destinations[0].destination_port = DEFAULT_TCPCLIENT_DEST_PORT1;
+	ch->tcp_destinations[0].designated_local_port =
+			DEFAULT_TCPCLIENT_LOCAL_PORT1;
 
-    ch->tcp_destinations[1].destination_ip = DEFAULT_TCPCLIENT_DEST_IP2;
-    ch->tcp_destinations[1].destination_port = DEFAULT_TCPCLIENT_DEST_PORT2;
-    ch->tcp_destinations[1].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT2;
+	ch->tcp_destinations[1].destination_ip = DEFAULT_TCPCLIENT_DEST_IP2;
+	ch->tcp_destinations[1].destination_port = DEFAULT_TCPCLIENT_DEST_PORT2;
+	ch->tcp_destinations[1].designated_local_port =
+			DEFAULT_TCPCLIENT_LOCAL_PORT2;
 
-    ch->tcp_destinations[2].destination_ip = DEFAULT_TCPCLIENT_DEST_IP3;
-    ch->tcp_destinations[2].destination_port = DEFAULT_TCPCLIENT_DEST_PORT3;
-    ch->tcp_destinations[2].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT3;
+	ch->tcp_destinations[2].destination_ip = DEFAULT_TCPCLIENT_DEST_IP3;
+	ch->tcp_destinations[2].destination_port = DEFAULT_TCPCLIENT_DEST_PORT3;
+	ch->tcp_destinations[2].designated_local_port =
+			DEFAULT_TCPCLIENT_LOCAL_PORT3;
 
-    ch->tcp_destinations[3].destination_ip = DEFAULT_TCPCLIENT_DEST_IP4;
-    ch->tcp_destinations[3].destination_port = DEFAULT_TCPCLIENT_DEST_PORT4;
-    ch->tcp_destinations[3].designated_local_port = DEFAULT_TCPCLIENT_LOCAL_PORT4;
+	ch->tcp_destinations[3].destination_ip = DEFAULT_TCPCLIENT_DEST_IP4;
+	ch->tcp_destinations[3].destination_port = DEFAULT_TCPCLIENT_DEST_PORT4;
+	ch->tcp_destinations[3].designated_local_port =
+			DEFAULT_TCPCLIENT_LOCAL_PORT4;
 
-    ch->connection_control = DEFAULT_TCPCLIENT_CONNECTION_CONTROL;
-	
+	ch->connection_control = DEFAULT_TCPCLIENT_CONNECTION_CONTROL;
 
-    // UDP 模式参数
-    ch->udp_destinations[0].begin_ip = DEFAULT_UDP_DEST_BEGIN_IP1;
-    ch->udp_destinations[0].end_ip   = DEFAULT_UDP_DEST_END_IP1;
-    ch->udp_destinations[0].port     = DEFAULT_UDP_DEST_PORT1;
+	// UDP 模式参数
+	ch->udp_destinations[0].begin_ip = DEFAULT_UDP_DEST_BEGIN_IP1;
+	ch->udp_destinations[0].end_ip = DEFAULT_UDP_DEST_END_IP1;
+	ch->udp_destinations[0].port = DEFAULT_UDP_DEST_PORT1;
 
-    ch->udp_destinations[1].begin_ip   = DEFAULT_UDP_DEST_BEGIN_IP2;
-    ch->udp_destinations[1].end_ip     = DEFAULT_UDP_DEST_END_IP2;
-	ch->udp_destinations[1].port       = DEFAULT_UDP_DEST_PORT2;
+	ch->udp_destinations[1].begin_ip = DEFAULT_UDP_DEST_BEGIN_IP2;
+	ch->udp_destinations[1].end_ip = DEFAULT_UDP_DEST_END_IP2;
+	ch->udp_destinations[1].port = DEFAULT_UDP_DEST_PORT2;
 
-    ch->udp_destinations[2].begin_ip   = DEFAULT_UDP_DEST_BEGIN_IP3;
-    ch->udp_destinations[2].end_ip     = DEFAULT_UDP_DEST_END_IP3;
-	ch->udp_destinations[2].port       = DEFAULT_UDP_DEST_PORT3;
+	ch->udp_destinations[2].begin_ip = DEFAULT_UDP_DEST_BEGIN_IP3;
+	ch->udp_destinations[2].end_ip = DEFAULT_UDP_DEST_END_IP3;
+	ch->udp_destinations[2].port = DEFAULT_UDP_DEST_PORT3;
 
-    ch->udp_destinations[2].begin_ip   = DEFAULT_UDP_DEST_BEGIN_IP4;
-    ch->udp_destinations[2].end_ip     = DEFAULT_UDP_DEST_END_IP4;
-	ch->udp_destinations[2].port       = DEFAULT_UDP_DEST_PORT4;
+	ch->udp_destinations[2].begin_ip = DEFAULT_UDP_DEST_BEGIN_IP4;
+	ch->udp_destinations[2].end_ip = DEFAULT_UDP_DEST_END_IP4;
+	ch->udp_destinations[2].port = DEFAULT_UDP_DEST_PORT4;
 
-    ch->local_udp_listen_port = DEFAULT_UDP_LOCAL_LISTEN_PORT + channel_index;
+	ch->local_udp_listen_port = DEFAULT_UDP_LOCAL_LISTEN_PORT + channel_index;
 
-    // --- 5. 初始化通用的数据打包参数 ---
-    ch->packing_settings.packing_length = DEFAULT_REAL_COM_PACKING_LENGTH;
-    ch->packing_settings.delimiter1 = DEFAULT_REAL_COM_DELIMITER1;
-    ch->packing_settings.delimiter2 = DEFAULT_REAL_COM_DELIMITER2;
-    ch->packing_settings.delimiter_process = DEFAULT_REAL_COM_DELIMITER_PROCESS;
-    ch->packing_settings.force_transmit_time_ms = DEFAULT_REAL_COM_FORCE_TRANSMIT_TIME;
+	// --- 5. 初始化通用的数据打包参数 ---
+	ch->packing_settings.packing_length = DEFAULT_REAL_COM_PACKING_LENGTH;
+	ch->packing_settings.delimiter1 = DEFAULT_REAL_COM_DELIMITER1;
+	ch->packing_settings.delimiter2 = DEFAULT_REAL_COM_DELIMITER2;
+	ch->packing_settings.delimiter_process = DEFAULT_REAL_COM_DELIMITER_PROCESS;
+	ch->packing_settings.force_transmit_time_ms =
+			DEFAULT_REAL_COM_FORCE_TRANSMIT_TIME;
 }
 
 void dev_config_load_defaults(void) {
@@ -269,13 +287,12 @@ void dev_config_load_defaults(void) {
 		strncpy(dev->user_name, "admin", MAX_PASSWORD_LEN);
 		strncpy(dev->password, "admin", MAX_PASSWORD_LEN);
 		dev->ip_config_mode = 1; // DHCP
-		
-		for(j=0;j<NET_NUM;j++){
+
+		for (j = 0; j < NET_NUM; j++) {
 			dev->ip_address[j] = inet_addr("192.168.8.220");
 			dev->netmask[j] = inet_addr("255.255.255.0");
 			dev->gateway[j] = inet_addr("192.168.8.1");
 		}
-
 
 		/* --- 加载每个通道的默认设置 --- */
 		for (i = 0; i < NUM_PORTS; i++) {
@@ -289,8 +306,7 @@ void dev_config_load_defaults(void) {
 	}
 }
 
-void dev_reboot(void) 
-{
+void dev_reboot(void) {
 	LOG_INFO("System rebooting...\n");
 	// TODO: 调用BSP或硬件驱动提供的系统重启函数
 	// Example: sysReboot();
@@ -303,8 +319,7 @@ void dev_reboot(void)
  * @details TODO: 实现具体的Flash读取逻辑。
  * 可能需要处理CRC校验、数据版本控制等。
  */
-static int read_config_from_flash(SystemConfiguration* config) 
-{
+static int read_config_from_flash(SystemConfiguration* config) {
 	LOG_INFO("TODO: Implement read_config_from_flash()\n");
 	// 1. 打开Flash设备
 	// 2. 读取数据块到一个临时缓冲区
@@ -320,8 +335,7 @@ static int read_config_from_flash(SystemConfiguration* config)
  * @details TODO: 实现具体的Flash写入逻辑。
  * 通常包括擦除扇区、写入数据、可能还有回读校验。
  */
-static int write_config_to_flash(const SystemConfiguration* config) 
-{
+static int write_config_to_flash(const SystemConfiguration* config) {
 	LOG_INFO("TODO: Implement write_config_to_flash()\n");
 	// 1. 打开Flash设备
 	// 2. (可选) 计算配置数据的CRC
@@ -338,8 +352,7 @@ static int write_config_to_flash(const SystemConfiguration* config)
 /**
  * @brief 将 UartPhysicalState 枚举转换为字符串
  */
-static const char* uart_state_to_string(UartPhysicalState state) 
-{
+static const char* uart_state_to_string(UartPhysicalState state) {
 	switch (state) {
 	case UART_STATE_CLOSED:
 		return "CLOSED";
@@ -355,8 +368,7 @@ static const char* uart_state_to_string(UartPhysicalState state)
 /**
  * @brief 将 NetworkChannelState 枚举转换为字符串
  */
-static const char* net_state_to_string(NetworkChannelState state) 
-{
+static const char* net_state_to_string(NetworkChannelState state) {
 	switch (state) {
 	case NET_STATE_IDLE:
 		return "IDLE";
@@ -371,7 +383,6 @@ static const char* net_state_to_string(NetworkChannelState state)
 	}
 }
 
-
 /**
  * @brief 应用新的网络配置，更新全局配置结构体，并将其保存到Flash。
  *
@@ -380,73 +391,68 @@ static const char* net_state_to_string(NetworkChannelState state)
  * @param gateway_str 新的网关字符串 (e.g., "192.168.1.1")。
  * @return int OK 成功, ERROR 失败。
  */
-int dev_network_settings_apply(const char *ip_str, const char *netmask_str, const char *gateway_str, const char index)
-{
-    // --- 步骤 1: 调用底层函数，将网络设置应用到操作系统 ---
-    // 假设网络接口名为 "gem0"
-	if(0 > index || index >= NET_NUM){
+int dev_network_settings_apply(const char *ip_str, const char *netmask_str,
+		const char *gateway_str, const char index) {
+	// --- 步骤 1: 调用底层函数，将网络设置应用到操作系统 ---
+	// 假设网络接口名为 "gem0"
+	if (0 > index || index >= NET_NUM) {
 		LOG_ERROR("The index of network interface is invalid.");
 		return ERROR;
 	}
-	
-	switch (index)
-	{
+
+	switch (index) {
 	case 0x00:
-		if (net_cfg_set_network_settings("gem0", ip_str, netmask_str, gateway_str) != OK)
-    	{
+		if (net_cfg_set_network_settings("gem0", ip_str, netmask_str,
+				gateway_str) != OK) {
 			LOG_ERROR("Failed to apply network settings to OS.");
 			return ERROR;
-   		}
+		}
 		break;
 	case 0x01:
-		if (net_cfg_set_network_settings("gem1", ip_str, netmask_str, gateway_str) != OK)
-    	{
+		if (net_cfg_set_network_settings("gem1", ip_str, netmask_str,
+				gateway_str) != OK) {
 			LOG_ERROR("Failed to apply network settings to OS.");
 			return ERROR;
-   		}
+		}
 		break;
 	default:
 		break;
 	}
 
+	LOG_INFO("Network settings successfully applied to OS.");
 
-    LOG_INFO("Network settings successfully applied to OS.");
+	// --- 步骤 2: 更新内存中的全局配置变量 g_system_config ---
+	LOG_INFO("Updating in-memory configuration...");
 
-    // --- 步骤 2: 更新内存中的全局配置变量 g_system_config ---
-    LOG_INFO("Updating in-memory configuration...");
+	// 获取配置互斥锁，保证线程安全
+	if (semTake(g_config_mutex, WAIT_FOREVER) == OK) {
+		// --- 进入临界区 ---
 
-    // 获取配置互斥锁，保证线程安全
-    if (semTake(g_config_mutex, WAIT_FOREVER) == OK)
-    {
-        // --- 进入临界区 ---
+		DeviceSettings* dev = &g_system_config.device;
 
-        DeviceSettings* dev = &g_system_config.device;
+		// 将字符串形式的IP地址转换为无符号整数并存储
+		dev->ip_address[index] = inet_addr(ip_str);
+		dev->netmask[index] = inet_addr(netmask_str);
+		dev->gateway[index] = inet_addr(gateway_str);
 
-        // 将字符串形式的IP地址转换为无符号整数并存储
-        dev->ip_address[index] = inet_addr(ip_str);
-        dev->netmask[index] = inet_addr(netmask_str);
-        dev->gateway[index] = inet_addr(gateway_str);
-        
-        // 如果需要，也可以在这里更新IP配置模式 (例如，从DHCP变为静态)
-        // dev->ip_config_mode = 0; // 0=Static
+		// 如果需要，也可以在这里更新IP配置模式 (例如，从DHCP变为静态)
+		// dev->ip_config_mode = 0; // 0=Static
 
-        // --- 退出临界区 ---
-        semGive(g_config_mutex);
-    }
-    else
-    {
-        LOG_ERROR("FATAL: Could not take config mutex to update network settings.");
-        return ERROR;
-    }
+		// --- 退出临界区 ---
+		semGive(g_config_mutex);
+	} else {
+		LOG_ERROR(
+				"FATAL: Could not take config mutex to update network settings.");
+		return ERROR;
+	}
 
-    // --- 步骤 3: 将更新后的配置保存到 Flash ---
-    if (dev_config_save() != OK)
-    {
-        LOG_ERROR("Failed to save updated network configuration to flash.");
-        return ERROR;
-    }
+	// --- 步骤 3: 将更新后的配置保存到 Flash ---
+	if (dev_config_save() != OK) {
+		LOG_ERROR("Failed to save updated network configuration to flash.");
+		return ERROR;
+	}
 
-    LOG_INFO("Network configuration successfully updated and saved.");
-    return OK;
+	LOG_INFO("Network configuration successfully updated and saved.");
+	return OK;
 }
 

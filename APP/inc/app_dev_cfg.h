@@ -17,12 +17,13 @@
 //--------------------------------------------------------------------------------------
 #define NET_NUM 2
 //--- Real COM Mode 默认配置参数 ---
-#define DEFAULT_COM_BAUDRATE               115200
+#define DEFAULT_COM_BAUDRATE                115200
+#define DEFAULT_COM_INTERFACE_TYPE          INTERFACE_TYPE_RS232               
 
 //--------------------------------------------------------------------------------------
 
 /** @brief 默认的操作模式 (Real COM)。 */
-#define DEFAULT_COM_OP_MODE              OP_MODE_REAL_COM
+#define DEFAULT_COM_OP_MODE              OP_MODE_TCP_SERVER
 /** @brief TCP 连接保活探测时间 (单位：分钟)。 */
 #define DEFAULT_REAL_COM_TCP_ALIVE_CHECK_MIN  7
 /** @brief 允许的最大TCP连接数。 */

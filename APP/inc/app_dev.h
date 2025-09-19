@@ -7,8 +7,8 @@
 /* ------------------ Application-Specific Constants ------------------ */
 #define NUM_PORTS               16      // 系统支持的串口/通道数量
 #define MAX_CLIENTS_PER_CHANNEL 4 		// 每个通道最多允许4个客户端
-#define RING_BUFFER_SIZE        (2048 * 1024) // 8KB 环形缓冲区大小
-#define MAX_CONFIG_CLIENTS      (NUM_PORTS * MAX_CLIENTS_PER_CHANNEL + 1) // 最大配置客户端数量
+#define RING_BUFFER_SIZE        (64 * 1024) // 64KB 环形缓冲区大小
+#define MAX_CONFIG_CLIENTS      (NUM_PORTS * (MAX_CLIENTS_PER_CHANNEL+1) + 1) // 最大配置客户端数量
 
 #define MAX_ALIAS_LEN               19
 #define MAX_MODEL_NAME_LEN          39
@@ -41,7 +41,16 @@ typedef enum {
 
 
 /**
- * @brief 定义通道的工作模式 (新添加)
+ * @brief 定义通道的接口模式
+ */
+typedef enum {
+    INTERFACE_TYPE_RS232   = 0x00, // RS232 Mode
+    INTERFACE_TYPE_RS422   = 0x01, // RS422 Mode
+    INTERFACE_TYPE_RS485   = 0x02, // RS485 Mode
+} Interface_Mode;
+
+/**
+ * @brief 定义通道的工作模式
  * @details 根据用户需求定义的操作模式枚举。
  */
 typedef enum {
@@ -115,6 +124,15 @@ typedef struct {
 } CmdChannelInfo;
 
 /**
+ * @brief 描述命令通道的网络状态和连接信息
+ */
+typedef struct {
+	NetworkChannelState state;
+	int client_fd;
+	int num_clients;
+} LocalChannelInfo;
+
+/**
  * @brief 全局设备配置结构体
  */
 typedef struct {
@@ -166,7 +184,7 @@ typedef struct {
 	UartPhysicalState   uart_state;       
     DataChannelInfo     data_net_info;
     CmdChannelInfo      cmd_net_info;
-
+    LocalChannelInfo    local_net_info;
     /* -- Serial Settings (0x04) -- */
     char alias[MAX_ALIAS_LEN+1];
     OperationMode  op_mode;

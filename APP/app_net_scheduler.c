@@ -15,8 +15,7 @@
 static void check_for_new_connections(void);
 static void run_net_recv(void);
 static void run_net_send(void);
-static void cleanup_data_connection(int channel_index,
-		int client_index_in_array);
+static void cleanup_data_connection(int channel_index,int client_index_in_array);
 
 /**
  * @brief 网络调度任务的主入口函数
@@ -129,7 +128,7 @@ static void run_net_send(void) {
 			continue;
 		}
 
-		// *** 核心逻辑: 从“串口到网络”的环形缓冲区读取所有可用数据 ***
+		// *** 从“串口到网络”的环形缓冲区读取所有可用数据 ***
 		unsigned int bytes_to_send = ring_buffer_dequeue_arr(
 				&channel->buffer_uart, (char*) temp_buffer_net,
 				sizeof(temp_buffer_net));
