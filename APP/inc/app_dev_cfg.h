@@ -73,6 +73,8 @@
 #define DEFAULT_TCPSERVER_LOCAL_TCP_PORT       4001
 /** @brief 本地监听的命令端口。 */
 #define DEFAULT_TCPSERVER_COMMAND_PORT         966
+/** @brief 本地监听的命令端口。 */
+#define DEFAULT_TCPSERVER_DATA_PORT            950
 
 //--------------------------------------------------------------------------------------
 //--- TCP Client Mode 默认配置参数 ---

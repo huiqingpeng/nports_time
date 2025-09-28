@@ -34,42 +34,80 @@ void NetworkSchedulerTask(void) {
 }
 
 /**
- * @brief 检查并接管来自ConnectionManager的新数据连接
+ * @brief (非阻塞)检查所有通道的新连接消息队列，并将新的fd分类存放到正确的管理结构中
+ *
+ * @description
+ * 此函数被设计为在主调度循环中被频繁调用。它会轮询所有16个通道的消息队列
+ * (g_net_conn_q[0] 到 g_net_conn_q[15])。
+ * 当接收到一个由 ConnectionManagerTask 分发来的 NewConnectionMsg 时，它会：
+ * 1. 根据 msg.channel_index 定位到对应的全局配置 ChannelState。
+ * 2. 根据 msg.conn_type 判断连接的类型（如：普通数据、RealCOM数据、RealCOM命令等）。
+ * 3. 将新的 client_fd 存入 ChannelState 中对应的 NetInfo 结构体
+ * (data_net_info 或 cmd_net_info) 的 client_fds 数组中。
+ * 4. 更新客户端计数器 (num_clients)，并处理连接数已满的情况。
+ * 5. 使用互斥信号量 g_config_mutex 保证对共享配置 g_system_config 的原子操作。
  */
 static void check_for_new_connections(void) {
-	NewConnectionMsg msg;
-	while (msgQReceive(g_data_conn_q, (char*) &msg, sizeof(msg), NO_WAIT)
-			== sizeof(NewConnectionMsg)) {
-		if (msg.type
-				== CONN_TYPE_DATA&& msg.channel_index >= 0 && msg.channel_index < NUM_PORTS) {
-			int i = msg.channel_index;
-			ChannelState* channel = &g_system_config.channels[i];
+    NewConnectionMsg msg;
+    int i; // 用于遍历通道
+
+    // 1. 遍历所有通道的消息队列
+    for (i = 0; i < NUM_PORTS; i++) // NUM_PORTS 应该定义为 16
+    {
+        // 使用 while 循环来排空当前通道队列中的所有消息
+        while (msgQReceive(g_net_conn_q[i], (char*) &msg, sizeof(msg), NO_WAIT) == OK)
+        {
+            // 验证消息的合法性
+            if (msg.channel_index != i) {
+                LOG_ERROR(
+                    "NetScheduler: Mismatched channel index in message! Queue_idx=%d, msg.ch_idx=%d. Closing fd=%d\n",
+                    i, msg.channel_index, msg.client_fd);
+                close(msg.client_fd);
+                continue; // 处理下一条消息
+            }
 
 			semTake(g_config_mutex, WAIT_FOREVER);
-			if (channel->data_net_info.num_clients < MAX_CLIENTS_PER_CHANNEL) {
-				int client_idx = channel->data_net_info.num_clients;
-				channel->data_net_info.client_fds[client_idx] = msg.client_fd;
 
-				if (channel->data_net_info.num_clients == 0) {
-					// 第一个客户端连接，状态从 LISTENING 变为 CONNECTED
+            ChannelState* channel = &g_system_config.channels[i];
+
+            // 2. 根据连接类型，选择正确的 NetInfo 结构体来存放 fd
+            switch (msg.type)
+            {
+                case CONN_TYPE_TCPSERVER:
+				case CONN_TYPE_REALCOM_DATA:
 					channel->data_net_info.state = NET_STATE_CONNECTED;
-				}
-				channel->data_net_info.num_clients++;
-				LOG_INFO(
-						"NetScheduler: Ch %d accepted new client fd=%d. Total clients: %d\n",
-						i, msg.client_fd, channel->data_net_info.num_clients);
-			} else {
-				LOG_ERROR(
-						"NetScheduler: Ch %d client limit reached. Rejecting fd=%d\n",
-						i, msg.client_fd);
-				close(msg.client_fd);
-			}
+					channel->data_net_info.client_fds[channel->data_net_info.num_clients] = msg.client_fd;
+					channel->data_net_info.num_clients++;
+				break;
+
+                case CONN_TYPE_TCPCLIENT:
+				case CONN_TYPE_UDP:
+
+				break;
+
+
+                case CONN_TYPE_REALCOM_CMD:
+                    channel->cmd_net_info.state = NET_STATE_CONNECTED;
+					channel->cmd_net_info.client_fds[channel->cmd_net_info.num_clients] = msg.client_fd;
+					channel->cmd_net_info.num_clients++;
+                    break;
+                
+                default:
+                    LOG_ERROR("NetScheduler: Ch %d received unknown conn_type %d. Closing fd=%d\n",
+                              i, msg.type, msg.client_fd);
+                    close(msg.client_fd);
+                    continue; // 跳过此无效消息
+            }
 			semGive(g_config_mutex);
 
-		} else {
-			close(msg.client_fd);
-		}
-	}
+			LOG_DEBUG("NetScheduler: Ch %d accepted new connection fd=%d, type=%d. Total clients: %d (Data), %d (Cmd)\n",
+					 i, msg.client_fd, msg.type,
+					 channel->data_net_info.num_clients,
+					 channel->cmd_net_info.num_clients);
+        }
+    }
+    
+    // (处理全局配置连接队列 g_config_conn_q 的逻辑可以放在这里，如果需要的话)
 }
 
 /**

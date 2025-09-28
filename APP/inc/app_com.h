@@ -29,8 +29,6 @@
 #include "app_dev.h"
 
 /* 网络端口定义 */
-#define TCP_DATA_PORT_START     950    // 数据通道起始端口 (950-965)
-#define TCP_SET_PORT_START      966    // 串口配置通道起始端口 (966-981)
 #define TCP_SETTING_PORT        4000   // 全局设备配置端口
 
 #define BUFFERCOM_SIZE_RX  (65536*2)
@@ -58,12 +56,53 @@
 
 
 /* ------------------ Enumerations and Type Definitions ------------------ */
+// ConnectionManagerTask 接收的控制命令类型
+typedef enum {
+    CTRL_CMD_RECONFIGURE_CHANNEL, // 命令 ConnectionManagerTask 重新配置一个通道
+    CTRL_CMD_CONNECTION_CLOSED,
+    // 未来可以扩展其他命令, 如 CTRL_CMD_SHUTDOWN, CTRL_CMD_STATUS_REPORT
+} ManagerCtrlCmdType;
 
+// ConnectionManagerTask 接收的控制消息结构
+typedef struct {
+    ManagerCtrlCmdType cmd_type;
+    int                channel_index; // 要重新配置的目标通道号
+} ManagerCtrlMsg;
+
+
+// SerialPortTask 接收的控制命令类型
+typedef enum {
+    PORT_TASK_CTRL_CMD_CLOSE_ALL_FDS, // 命令 SerialPortTask 关闭其当前持有的所有 sockets
+} PortTaskCtrlCmdType;
+
+// SerialPortTask 接收的控制消息结构
+typedef struct {
+    PortTaskCtrlCmdType cmd_type;
+    // 未来可以为其他命令增加参数
+} PortTaskCtrlMsg;
+
+/**
+ * @brief TCP远程目标端点定义
+ * @details 包含目标IP、目标端口和本地源端口。
+ */
+// TCP Client 模式下，每个目标服务器的配置
+typedef struct {
+    char target_ip[16];     // 目标服务器IP地址 (e.g., "192.168.1.100")
+    int  target_port;       // 目标服务器端口
+} TcpClientTarget;
 
 /**
  * @brief 定义网络连接的类型，用于ConnectionManager分发
  */
 typedef enum {
+    CONN_TYPE_UNKNOWN,
+    CONN_TYPE_REALCOM_DATA,
+    CONN_TYPE_REALCOM_CMD,
+    CONN_TYPE_TCPSERVER,
+    CONN_TYPE_TCPCLIENT,
+    CONN_TYPE_UDP,
+    CONN_TYPE_GLOBAL_CONFIG,
+
     CONN_TYPE_DATA,    // 数据通道
     CONN_TYPE_SET,     // 单个串口配置通道
     CONN_TYPE_SETTING  // 全局设备配置通道
@@ -99,7 +138,7 @@ typedef struct {
  * 在.c文件中定义的全局变量，在此处用extern声明，以便其他文件可以访问。
  */
 // 消息队列ID
-extern MSG_Q_ID g_data_conn_q;
+extern MSG_Q_ID g_net_conn_q[NUM_PORTS];
 extern MSG_Q_ID g_config_conn_q;
 
 // 互斥锁ID
@@ -107,9 +146,9 @@ extern SEM_ID g_config_mutex;
 
 // 主状态数组：包含所有16个通道的状态
 extern SystemConfiguration g_system_config;
-extern PortMapping g_port_mappings[NUM_PORTS];
 
 extern void ConnectionManagerTask(void);
+
 extern void ConfigTaskManager(void);
 extern void RealTimeSchedulerTask(void);
 

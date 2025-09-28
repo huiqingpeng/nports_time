@@ -13,6 +13,7 @@
 #include "./inc/app_com.h"
 #include "./inc/app_udp_search.h"
 #include "./inc/app_net_cfg.h"
+#include "./inc/app_com.h"
 
 
 /* ------------------ Task Configuration Constants ------------------ */
@@ -31,8 +32,11 @@
 // 计算配置队列的最大容量
 #define CONFIG_QUEUE_CAPACITY (DATA_QUEUE_CAPACITY)
 
+#define MAX_MSG_IN_Q 24
+
 MSG_Q_ID g_config_conn_q;
-MSG_Q_ID g_data_conn_q;
+MSG_Q_ID g_net_conn_q[NUM_PORTS];
+MSG_Q_ID g_serial_port_ctrl_q[NUM_PORTS];
 /* ------------------ Global Variable Definitions ------------------ */
 SEM_ID g_config_mutex;
 TASK_ID g_conn_manager_tid;
@@ -56,10 +60,16 @@ void app_start(void) {
 
 	// 创建消息队列
 	// 参数: maxMsgs, maxMsgLength, options
-	g_data_conn_q = msgQCreate(DATA_QUEUE_CAPACITY, sizeof(NewConnectionMsg),MSG_Q_FIFO);
+    for (i = 0; i < NUM_PORTS; i++) {
+        g_net_conn_q[i] = msgQCreate(MAX_MSG_IN_Q, sizeof(NewConnectionMsg), MSG_Q_FIFO);
+        if (g_net_conn_q[i] == NULL) {
+            // 错误处理: 记录日志或停止系统
+            LOG_ERROR("Failed to create message queue for channel %d\n", i);
+        }
+    }
 	g_config_conn_q = msgQCreate(DATA_QUEUE_CAPACITY,sizeof(NewConnectionMsg), MSG_Q_FIFO);
 
-	if (g_data_conn_q == NULL || g_config_conn_q == NULL) {
+	if (g_config_conn_q == NULL) {
 		LOG_ERROR("FATAL: Failed to create message queues.\n");
 		return;
 	}
@@ -74,7 +84,6 @@ void app_start(void) {
 	}
 	LOG_INFO("Configuration mutex created.\n");
 	dev_config_init();
-	dev_net_init();
 
 	dev_network_settings_apply("192.168.8.220", "255.255.255.0", "192.168.8.1",0);
 	
@@ -104,10 +113,7 @@ void app_start(void) {
 	/* ------------------ 3. 创建应用程序任务 ------------------ */
 	LOG_INFO("Spawning application tasks...\n");
 
-	// 创建 ConnectionManagerTask
-	g_conn_manager_tid = taskSpawn("tConnManager",
-	CONN_MANAGER_PRIORITY, 0, DEFAULT_STACK_SIZE,
-			(FUNCPTR) ConnectionManagerTask, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+	ConnectionManager_TaskStart();
 
 	// 创建 ConfigTaskManager
 	g_config_task_manager_tid = taskSpawn("tConfigManager",

@@ -132,17 +132,6 @@ int dev_config_init(void) {
 	}
 }
 
-int dev_net_init(void) {
-	int i;
-	for (i = 0; i < NUM_PORTS; i++) {
-		g_port_mappings[i].channel_index = i;
-		g_port_mappings[i].local_tcp_listen_fd = -1;
-		g_port_mappings[i].local_tcp_port = g_system_config.channels[i].local_tcp_port;
-		g_port_mappings[i].data_port = TCP_DATA_PORT_START + 1;
-		g_port_mappings[i].command_port = g_system_config.channels[i].command_port;
-	}
-}
-
 int dev_config_save(void) {
 	int status;
 	LOG_INFO("Attempting to save configuration to flash...\n");
@@ -200,7 +189,7 @@ static void dev_config_init_channel_defaults(ChannelState* ch,
 	// Real COM 模式参数
 	ch->max_connections = DEFAULT_REAL_COM_MAX_CONNECTIONS;
 	ch->allow_driver_control = DEFAULT_REAL_COM_ALLOW_DRIVER_CONTROL;
-
+    ch->data_port = DEFAULT_TCPSERVER_DATA_PORT + channel_index;
 	// TCP Server 模式参数
 	ch->local_tcp_port = DEFAULT_TCPSERVER_LOCAL_TCP_PORT + channel_index;
 	ch->command_port = DEFAULT_TCPSERVER_COMMAND_PORT + channel_index;

@@ -226,6 +226,7 @@ typedef struct {
     unsigned char  max_connections;          // 最大连接数 (仅 Real COM/TCP Server)
     unsigned short local_tcp_port;           // 本地监听端口 (TCP Server/Real COM)
     unsigned short command_port;           // 本地监听端口 (TCP Server/Real COM)
+    unsigned short data_port;
     unsigned short connection_control;     // 连接控制 (仅 TCP Client Mode)
 
     // b) TCP Client / UDP 模式特定参数
