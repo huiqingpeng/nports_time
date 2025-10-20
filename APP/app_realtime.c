@@ -14,7 +14,7 @@
 #include <intLib.h>     // For intConnect()
 
 /* ------------------ Task-Specific Constants ------------------ */
-#define MEDIUM_FREQ_INTERVAL     (10)          // 中频任务执行间隔 (10 * 100µs = ms)
+#define MEDIUM_FREQ_INTERVAL     (20)          // 中频任务执行间隔 (10 * 100µs = ms)
 #define LOW_FREQ_INTERVAL        (5*1000)     // 任务执行间隔 (1000ms)
 
 #define TX_CHUNK_SIZE (UART_HW_FIFO_SIZE / 2)
@@ -101,7 +101,7 @@ void RealTimeSchedulerTask(void) {
         }
         
 		if (minor_cycle_counter >= LOW_FREQ_INTERVAL) { // 假设100ms为一个主周期
-			minor_cycle_counter = 0;
+			minor_cycle_counter = 0; 
             run_low_frequency_tasks();
 		}
 	}
@@ -137,8 +137,6 @@ static void handle_serial_rx(void)
                     ring_buffer_queue_arr(&channel->buffer_uart, (const char*)temp_buffer, bytes_count);
                 }
                 channel->rx_count += bytes_count;
-                // printf("RX:%d \r\n ",bytes_count);
-                // printHex(temp_buffer, bytes_count);
             }
         }
     }
@@ -148,12 +146,12 @@ static void handle_serial_rx(void)
  * @brief 串口发送处理函数
  * @details 从软件环形缓冲区取出数据，并写入所有活跃的串口硬件FIFO。
  */
-unsigned char data_chunk[TX_CHUNK_SIZE];
 static void handle_serial_tx(void)
 {
     int i;
     uint32_t bytes_count;
-
+    uint32_t tx_fifo_info;
+    // tx_fifo_info = UART_TX_FIFO_Info();
     for (i = 0; i < NUM_PORTS; i++) {
         ChannelState* channel = &g_system_config.channels[i];
 
@@ -164,30 +162,13 @@ static void handle_serial_tx(void)
             if (!ring_buffer_is_empty(&channel->buffer_net)) 
             {
                 // 检查串口硬件是否准备好接收数据
-                //if (axi16550_TxReady(i)) 
+                if (0 == UART_TX_FIFO_Ready(i)) 
                 {
                     // 从环形缓冲区中取出数据
                     bytes_count = ring_buffer_dequeue_arr(&channel->buffer_net, (char*)temp_buffer, TX_CHUNK_SIZE);
-                    // printf("TX:%d \r\n ",bytes_count);
-                    // printHex(temp_buffer, bytes_count);
                     if (bytes_count > 0) {
                         // 将数据写入串口硬件
-                        int j;
-                        for (j = 0; j < bytes_count; j++)
-                        {
-                            // 等待，直到硬件发送FIFO有可用空间 (LSR_THRE位被置位)
-                            // 这是一个忙等待循环，确保以最快速度响应
-                            while (!axi16550_TxReady(i))
-                            {
-                                // 在等待期间可以考虑放弃CPU，但这会降低极限吞吐率
-                                // 对于硬实时测试，可以不加taskDelay
-                                // taskDelay(0); 
-                            }
-                            
-                            // 向发送保持寄存器(THR)写入一个字节
-                            // FIFO会自动处理后续字节的移入
-                            userAxiCfgWrite(i, 0x1000, temp_buffer[j]);
-                        }
+                        axi16550SendNoWait(i, temp_buffer, bytes_count);
                         channel->tx_count += bytes_count;
                     }
                 }
@@ -269,23 +250,27 @@ static void handle_led_blinking(void)
  */
 static void run_medium_frequency_tasks(void) {
     NetworkSchedulerTask();
-    handle_led_blinking();
+    // handle_led_blinking();
 }
 
 
 static void run_low_frequency_tasks(void) 
 {
     int i;
-    for (i = 0; i < NUM_PORTS; i++) {
-        ChannelState* channel = &g_system_config.channels[i];
+    // for (i = 0; i < NUM_PORTS; i++) {
+    //     
 
-        // 只处理有客户端连接且串口已打开的通道
-        if (channel->data_net_info.num_clients > 0 && channel->uart_state == UART_STATE_OPENED) 
-        {
-            LOG_INFO("[%d]:rx_count= %d, tx_count= %d", i, channel->rx_count, channel->tx_count);
-            LOG_INFO("[%d]:rx_net  = %d, tx_net  = %d", i, channel->rx_net,   channel->tx_net);
-        }
-    }
+    //     // 只处理有客户端连接且串口已打开的通道
+    //     //if (channel->data_net_info.num_clients > 0 || channel->uart_state == UART_STATE_OPENED) 
+    //     if(channel->uart_state == UART_STATE_OPENED)
+    //     {
+    //         LOG_FATAL("[%d]:rx_count= %d, tx_count= %d", i, channel->rx_count, channel->tx_count);
+    //         LOG_FATAL("[%d]:rx_net  = %d, tx_net  = %d", i, channel->rx_net,   channel->tx_net);
+    //     }
+    // }
+    ChannelState* channel = &g_system_config.channels[0];
+    LOG_FATAL("[%d]:rx_count= %d, tx_count= %d", 0, channel->rx_count, channel->tx_count);
+    LOG_FATAL("[%d]:rx_net  = %d, tx_net  = %d", 0, channel->rx_net,   channel->tx_net);
 }
 
 

@@ -23,11 +23,11 @@
 //--------------------------------------------------------------------------------------
 
 /** @brief 默认的操作模式 (Real COM)。 */
-#define DEFAULT_COM_OP_MODE              OP_MODE_TCP_SERVER
+#define DEFAULT_COM_OP_MODE              OP_MODE_REAL_COM
 /** @brief TCP 连接保活探测时间 (单位：分钟)。 */
 #define DEFAULT_REAL_COM_TCP_ALIVE_CHECK_MIN  7
 /** @brief 允许的最大TCP连接数。 */
-#define DEFAULT_REAL_COM_MAX_CONNECTIONS      1
+#define DEFAULT_REAL_COM_MAX_CONNECTIONS      8
 /** @brief 是否忽略造成网络拥塞的IP (0: No)。 */
 #define DEFAULT_REAL_COM_IGNORE_JAMMED_IP     0
 /** @brief 是否允许驱动程序通过特殊指令控制设备 (0: No)。 */

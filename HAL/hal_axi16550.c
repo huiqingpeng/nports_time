@@ -43,6 +43,15 @@ int axi16550_TxReady(unsigned int channel)
         return 1;  /* Ready (THR or FIFO is empty) */
 }
 
+
+int axi16550_Tx_IDLE(unsigned int channel)
+{
+    if ((userAxiCfgRead(channel, AXI_16550_LSR) & LSR_TEMT) == 0)
+        return 0;  /* Not ready (THR or FIFO not empty) */
+    else
+        return 1;  /* Ready (THR or FIFO is empty) */
+}
+
 int axi16550SendNoWait(unsigned int channel, uint8_t *buffer, uint32_t len)
 {
     int i = 0;
@@ -168,16 +177,22 @@ void axi165502CInit(usart_info_t *uart_instance, int channel)
     userAxiCfgWrite(channel, AXI_16550_DLL, dll);
     userAxiCfgWrite(channel, AXI_16550_LCR, reg);
     userAxiCfgWrite(channel, AXI_16550_LCR, lcr);
-    userAxiCfgWrite(channel, AXI_16550_FCR, 0x07);
-    userAxiCfgWrite(channel, AXI_16550_MCR, 0x00);
+    userAxiCfgWrite(channel, AXI_16550_MCR, 0x10); /* loop enable */
     userAxiCfgWrite(channel, AXI_16550_IER, 0x00);
+    axi16550FIFOInit(channel);
 }
 
 /* FIFO initialization function */
 int axi16550FIFOInit(int port)
 {
-    userAxiCfgWrite(port, AXI_16550_FCR, 0x87);
-    userAxiCfgWrite(port, AXI_16550_FCR, 0x81);
+    // Enable FIFO, clear both RX and TX FIFOs  
+    /*
+    DMA Mode 1
+    Resets XMIT FIFO.
+    Resets RCVR FIFO.
+    Enables FIFOs.
+    */
+    userAxiCfgWrite(port, AXI_16550_FCR, 0x0F);
     return 0;
 }
 
@@ -212,3 +227,92 @@ void Portled(int i, int action) {
 	sysAxiWriteLong(PL_AXI_BASE + reg_address, value);
 }
 
+void FPGA_Info_Read(void)
+{
+    uint32_t reg_value;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x304);
+    printf("FPGA Info: 0x%08X\r\n", reg_value);
+}
+
+
+uint32_t UART_FIFO_Info_Read(void)
+{
+      uint32_t reg_value = 0;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x300);
+    return reg_value;
+}
+
+
+void UART_FIFO_Info_Print(void)
+{
+    volatile uint32_t reg_value = 0;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x300);
+    printf("UART Info: 0x%08X\r\n", reg_value);
+}
+
+
+void UART_FIFO_RX(void)
+{
+    volatile uint32_t reg_value = 0;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x30c);
+    printf("RX: 0x%08X\r\n", reg_value);
+}
+
+void UART_FIFO_TX(void)
+{
+    volatile uint32_t reg_value = 0;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x308);
+    printf("TX: 0x%08X\r\n", reg_value);
+}
+
+// 定义位掩码
+#define BIT_MASK(n) (1 << (n))
+
+// 判断第n位是否为1
+int check_bit(unsigned int num, int n) {
+    if(num & BIT_MASK(n)) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+uint32_t  UART_TX_FIFO_Info(void)
+{
+    volatile uint32_t reg_value = 0;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x308);
+    return reg_value;
+}
+
+/*
+ DMA Modes Signaling
+ Mode 0
+    txrdyn:
+        LOW  : no characters in the THR or Transmitter FIFO
+        HIGH : the first character is loaded into the THR or FIFO.
+    RXRDYn
+        LOW  : at least one character in the Receiver FIFO or Receiver holding register
+        HIGH : no characters in FIFO or receiver holding register.
+
+ Mode 1
+    txrdyn
+        LOW  : no characters in the Transmitter FIFO
+        HIGH : FIFO is completely full.
+    RXRDYn
+        LOW  : trigger level or the timeout has been reached
+        HIGH : no characters in the FIFO
+*/
+uint8_t UART_TX_FIFO_Ready(uint8_t channel)
+{
+    volatile uint32_t reg_value = 0;
+    reg_value = sysAxiReadLong(PL_AXI_BASE + 0x308);
+    return check_bit(reg_value, 15 - channel);
+}
+
+
+void UART_LSR_Print(uint8_t channel)
+{
+    volatile uint32_t reg_value = 0;
+    reg_value = userAxiCfgRead(channel, AXI_16550_LSR);
+    printf("UART[%d] LSR: 0x%02X\r\n", channel, reg_value);
+}

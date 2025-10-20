@@ -229,15 +229,17 @@ static void process_network_events(fd_set* p_readfds, fd_set* p_writefds) {
     handle_pending_connections(p_writefds);
 }
 
-static void handle_new_connections(fd_set* p_readfds) {\
+static void handle_new_connections(fd_set* p_readfds) 
+{
 	int i;
-    for ( i = 0; i < MAX_LISTENERS; i++) {
-        if (g_listener_map[i].is_in_use && FD_ISSET(g_listener_map[i].listen_fd, p_readfds)) {
-            
+    for ( i = 0; i < MAX_LISTENERS; i++) 
+    {
+        if (g_listener_map[i].is_in_use && FD_ISSET(g_listener_map[i].listen_fd, p_readfds)) 
+        {
             int channel_index = g_listener_map[i].channel_index;
             UINT8 max_connections = g_system_config.channels[channel_index].max_connections;
 
-            if (g_active_tcp_connections[channel_index] >= max_connections) {
+            if (g_active_tcp_connections[channel_index] > max_connections) {
                 LOG_DEBUG("Max connection limit (%d) reached for channel %d. Rejecting.\n", max_connections, channel_index);
                 int temp_fd = accept(g_listener_map[i].listen_fd, NULL, NULL);
                 if (temp_fd >= 0) close(temp_fd);
@@ -249,21 +251,50 @@ static void handle_new_connections(fd_set* p_readfds) {\
             int client_fd = accept(g_listener_map[i].listen_fd, (struct sockaddr*)&client_addr, &addr_len);
             
             if (client_fd >= 0) {
-                g_active_tcp_connections[channel_index]++;
-                LOG_DEBUG("Accepted fd=%d for channel %d from %s. Active count: %d\n", 
-                       client_fd, channel_index, inet_ntoa(client_addr.sin_addr), g_active_tcp_connections[channel_index]);
-                       
+                g_active_tcp_connections[g_listener_map[i].channel_index]++;
                 NewConnectionMsg msg;
                 msg.client_fd = client_fd;
-                msg.channel_index = channel_index;
+                msg.channel_index = g_listener_map[i].channel_index;
                 msg.type = g_listener_map[i].conn_type;
-                if (msgQSend(g_net_conn_q[msg.channel_index], (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
-                    LOG_ERROR("Failed to dispatch fd=%d. Closing and decrementing count.\n", client_fd);
-                    close(client_fd);
-                    g_active_tcp_connections[channel_index]--;
+                // 根据 conn_type 决定派发到哪个队列 ---
+                switch (msg.type)
+                {
+                    case CONN_TYPE_REALCOM_CMD:
+                    {
+                        LOG_DEBUG("Dispatching CMD connection (fd=%d) to ConfigTaskManager.\n", client_fd);
+                        if (msgQSend(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
+                            LOG_ERROR("Failed to dispatch CMD fd=%d. Closing.\n", client_fd);
+                            close(client_fd);
+                            g_active_tcp_connections[msg.channel_index]--; 
+                        }
+                    }
+                    break;
+
+                    case CONN_TYPE_SETTING:
+                    {
+                        LOG_DEBUG("Dispatching SETTING connection (fd=%d) to ConfigTaskManager.\n", client_fd);
+                        if (msgQSend(g_config_conn_q, (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
+                            LOG_ERROR("Failed to dispatch SETTING fd=%d. Closing.\n", client_fd);
+                            close(client_fd);
+                            g_active_tcp_connections[msg.channel_index]--; 
+                        }
+                    }
+                    break;
+
+                    default:
+                    {
+                        LOG_DEBUG("Dispatching DATA connection (fd=%d) to NetSchedulerTask channel %d.\n", client_fd, msg.channel_index);
+                        if (msgQSend(g_net_conn_q[msg.channel_index], (char*)&msg, sizeof(msg), NO_WAIT, MSG_PRI_NORMAL) != OK) {
+                            LOG_ERROR("Failed to dispatch DATA fd=%d. Closing.\n", client_fd);
+                            close(client_fd);
+                            g_active_tcp_connections[msg.channel_index]--;
+                        }
+                    }
+                    break;
                 }
+
             } else {
-                 perror("accept() failed");
+                 LOG_ERROR("accept() failed");
             }
         }
     }

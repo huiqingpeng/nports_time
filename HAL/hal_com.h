@@ -26,7 +26,7 @@
 #include <netinet/in.h>
 #include "hal_log.h"
 
-#define UART_HW_FIFO_SIZE               (128)
+#define UART_HW_FIFO_SIZE               (256)
 
 
 

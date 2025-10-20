@@ -67,7 +67,9 @@ void ConfigTaskManager(void)
                 s_sessions[new_index].last_activity_time = time(NULL);
                 s_sessions[new_index].rx_bytes = 0;
                 s_num_active_sessions++;
-                if (msg.type == CONN_TYPE_SET && msg.channel_index >= 0) {
+                LOG_DEBUG("ConfigTaskManager: Accepted new connection fd=%d, type=%d, channel_index=%d. Total sessions: %d\n",
+                    msg.client_fd, msg.type, msg.channel_index, s_num_active_sessions);
+                if (msg.type == CONN_TYPE_REALCOM_CMD && msg.channel_index >= 0) {
                     int i = msg.channel_index;
                     ChannelState* channel = &g_system_config.channels[i];
 
@@ -152,16 +154,13 @@ void ConfigTaskManager(void)
 }
 
 /**
- * @brief 处理单个串口配置指令 (CONN_TYPE_SET)
+ * @brief 处理单个串口配置指令
  * @details 直接将接收到的数据缓冲区传递给 app_uart.c 中的 handle_command。
  */
 static void handle_serial_port_command(ClientSession* session) {
     
-    ChannelState* p_channel_state = &g_system_config.channels[session->channel_index];
-
-    LOG_DEBUG("handle_serial_port_command: fd=%d, channel_index=%d", session->fd, session->channel_index);
-    handle_command(p_channel_state, session->fd, (char*)session->rx_buffer, session->rx_bytes, session->channel_index);
-    
+    ChannelState* p_channel = &g_system_config.channels[session->channel_index];
+    handle_command(p_channel, session->fd, (char*)session->rx_buffer, session->rx_bytes, session->channel_index);
     // 处理完后清空缓冲区，准备接收下一条指令
     session->rx_bytes = 0;
 }
@@ -232,9 +231,7 @@ static int handle_config_client(int index) {
   
     if (n > 0) {
         session->rx_bytes += n;
-        
-        if (session->type == CONN_TYPE_SET) {
-            LOG_DEBUG("CONN_TYPE_SET");
+       if (session->type == CONN_TYPE_REALCOM_CMD) {
             handle_serial_port_command(session);
         } else if (session->type == CONN_TYPE_SETTING) {
             LOG_DEBUG("CONN_TYPE_SETTING");
@@ -302,7 +299,7 @@ static void cleanup_config_connection(int index)
     int fd_to_close = session->fd;
 
     // --- 步骤 1: 如果是特定通道的命令连接，则更新其状态 ---
-    if (session->type == CONN_TYPE_SET && session->channel_index >= 0) {
+    if (session->type == CONN_TYPE_REALCOM_CMD && session->channel_index >= 0) {
         int channel_index = session->channel_index;
         
         semTake(g_config_mutex, WAIT_FOREVER);
