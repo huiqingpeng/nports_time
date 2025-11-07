@@ -62,7 +62,7 @@ typedef struct {
     BOOL            is_in_use;
 } PendingConnection;
 
-#define MAX_LISTENERS           (16 * 2 + 1) // 16串口*2(RealCom)+1全局配置
+#define MAX_LISTENERS           (16 * 4 + 1) // 16串口*2(RealCom)+1全局配置
 #define MAX_PENDING_CONNECTIONS (16 * 8)     // 16串口*8(TCP Client)
 
 /* ================================================================================
@@ -453,6 +453,8 @@ static int create_tcp_listener(int port) {
     if (listen(listen_fd, 8) < 0) {
         perror("listen()"); close(listen_fd); return ERROR;
     }
+    int flags = fcntl(listen_fd, F_GETFL, 0);
+    fcntl(listen_fd, F_SETFL, flags | O_NONBLOCK);
     return listen_fd;
 }
 

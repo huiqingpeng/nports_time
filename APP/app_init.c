@@ -13,12 +13,11 @@
 #include "./inc/app_com.h"
 #include "./inc/app_udp_search.h"
 #include "./inc/app_net_cfg.h"
-#include "./inc/app_com.h"
-
+#include "./inc/app_net_scheduler.h"
 
 /* ------------------ Task Configuration Constants ------------------ */
 // 任务优先级 (数字越小，优先级越高)
-#define REALTIME_SCHEDULER_PRIORITY   50
+#define REALTIME_SCHEDULER_PRIORITY   55
 #define CONFIG_TASK_MANAGER_PRIORITY  60
 #define CONN_MANAGER_PRIORITY         70
 #define UDP_SEARCH_PRIORITY           75
@@ -51,8 +50,8 @@ void app_start(void) {
 	int i,j;
 	log_init(LOG_LEVEL_DEBUG);
 
-
-
+	FPGA_Info_Read();
+	LOG_ERROR("\n\n--- UART FIFO : %d ---\n", UART_HW_FIFO_SIZE/2);
 	LOG_INFO("\n\n--- Application Starting ---\n");
 
 	/* ------------------ 1. 初始化全局资源 ------------------ */
@@ -86,13 +85,6 @@ void app_start(void) {
 	dev_config_init();
 
 	dev_network_settings_apply("192.168.8.220", "255.255.255.0", "192.168.8.1",0);
-	
-	{
-		// lagDevCreate("lag0", 0);
-		// lagPortAttach("lag0", "gem0");
-		// lagPortAttach("lag0", "gem1");
-		// ifconfig("lag0 inet 192.168.8.220 netmask 255.255.255.0");
-	}
 
 	/* ------------------ 2. 初始化通道状态 ------------------ */
 	LOG_INFO("Initializing channel states...\n");
@@ -138,6 +130,7 @@ void app_start(void) {
 		// 此处可能需要清理已创建的资源
 		return;
 	}
+	start_update_server();
 
 	LOG_INFO("All tasks spawned successfully.\n");
 	LOG_INFO("--- Application Initialization Complete ---\n\n");

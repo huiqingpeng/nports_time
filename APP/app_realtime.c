@@ -10,11 +10,12 @@
  * =====================================================================================
  */
 #include "./inc/app_com.h"
+#include "./HAL/hal_axi16550.h"
 #include <timers.h>     // For POSIX timers if used as fallback, or custom timer driver header
 #include <intLib.h>     // For intConnect()
 
 /* ------------------ Task-Specific Constants ------------------ */
-#define MEDIUM_FREQ_INTERVAL     (20)          // 中频任务执行间隔 (10 * 100µs = ms)
+#define MEDIUM_FREQ_INTERVAL     (50)          // 中频任务执行间隔 (10 * 100µs = ms)
 #define LOW_FREQ_INTERVAL        (5*1000)     // 任务执行间隔 (1000ms)
 
 #define TX_CHUNK_SIZE (UART_HW_FIFO_SIZE / 2)
@@ -64,14 +65,42 @@ static void high_precision_timer_isr(void *arg) {
 	// ISR中唯一要做的事：释放信号量唤醒实时任务
 	timer_cnt++;
 	semGive(s_timer_sync_sem);
+    run_high_frequency_tasks();
 }
 
+void uart_test()
+{
+    uint8_t i=0;
+    uint32_t j=0;
+    const char test_data[] = {0,1,2,3,4,5,6,7,8,9};
+    for (i = 0; i < NUM_PORTS; i++) {
+        usart_info_t uart_info;
+        
+        memset(&uart_info, 0, sizeof(uart_info));
+        uart_info.baud_rate = 921600;
+        uart_info.data_bit = 8;
+        uart_info.stop_bit = 1;
+        uart_info.parity = 0x00;
+        axi165502CInit(&uart_info, i);
+
+        ChannelState* channel = &g_system_config.channels[i];
+        channel->uart_state = UART_STATE_OPENED;
+        // send data
+        channel->tx_net = 0;
+        for(j=0;j<uart_info.baud_rate/100;j++){
+            ring_buffer_queue_arr(&channel->buffer_net,(const char*) test_data,sizeof(test_data));
+            channel->tx_net += sizeof(test_data);
+        }
+    }
+    printf("uart_test end...\n");
+}
 /**
  * @brief RealTimeSchedulerTask 的主入口函数
  */
 void RealTimeSchedulerTask(void) {
     unsigned int minor_cycle_counter = 0;
 	LOG_INFO("RealTimeSchedulerTask: Starting...\n");
+    // uart_test();
 
 	// 1. 创建用于同步的二进制信号量
 	s_timer_sync_sem = semBCreate(SEM_Q_PRIORITY, SEM_EMPTY);
@@ -88,6 +117,7 @@ void RealTimeSchedulerTask(void) {
 		return;
 	}
 	LOG_INFO("RealTimeSchedulerTask: High-precision timer initialized.\n");
+    // return;
 
 	/* ------------------ 主调度循环 ------------------ */
 	while (1) {
@@ -95,14 +125,14 @@ void RealTimeSchedulerTask(void) {
 		semTake(s_timer_sync_sem, WAIT_FOREVER);
         minor_cycle_counter++;
 		/* --- 100µs 高频任务 --- */
-		run_high_frequency_tasks();
+		//run_high_frequency_tasks();
         if ((minor_cycle_counter % MEDIUM_FREQ_INTERVAL) == 0) {
             run_medium_frequency_tasks();
         }
         
 		if (minor_cycle_counter >= LOW_FREQ_INTERVAL) { // 假设100ms为一个主周期
 			minor_cycle_counter = 0; 
-            run_low_frequency_tasks();
+            //run_low_frequency_tasks();
 		}
 	}
 }
@@ -115,7 +145,7 @@ static unsigned char temp_buffer[2048];
 static void handle_serial_rx(void)
 {
     int i;
-    uint32_t bytes_count = 0;
+    size_t bytes_count = 0;
 
     for (i = 0; i < NUM_PORTS; i++) {
         ChannelState* channel = &g_system_config.channels[i];
@@ -126,16 +156,8 @@ static void handle_serial_rx(void)
             // 从串口硬件非阻塞地读取FIFO中的所有数据
             axi16550Recv(i, temp_buffer, &bytes_count);
             if (bytes_count > 0) {
-                // 检查软件缓冲区是否会溢出
-                if ((ring_buffer_num_items(&channel->buffer_uart) + bytes_count) > RING_BUFFER_SIZE)
-                {
-                    // 缓冲区已满，此处应处理错误（例如增加一个丢包计数器）
-                    // for production code, you might want to increment a drop counter here.
-                    // channel->rx_dropped_count += bytes_count;
-                } else {
-                    // 将读取到的数据放入“串口到网络”的环形缓冲区
-                    ring_buffer_queue_arr(&channel->buffer_uart, (const char*)temp_buffer, bytes_count);
-                }
+                // 将读取到的数据放入“串口到网络”的环形缓冲区
+                ring_buffer_queue_arr(&channel->buffer_uart, (const char*)temp_buffer, bytes_count);
                 channel->rx_count += bytes_count;
             }
         }
@@ -156,6 +178,7 @@ static void handle_serial_tx(void)
         ChannelState* channel = &g_system_config.channels[i];
 
         // 智能轮询：只处理有客户端连接且串口已打开的通道
+        // if (channel->data_net_info.num_clients > 0 && channel->uart_state == UART_STATE_OPENED) 
         if (channel->data_net_info.num_clients > 0 && channel->uart_state == UART_STATE_OPENED) 
         {
             // 检查“网络到串口”缓冲区中是否有数据
@@ -188,17 +211,16 @@ static void run_high_frequency_tasks(void)
     static int call_count = 0;
     call_count++;
     // 1. 统一处理所有端口的接收
-    //if(call_count % 2 == 0)
+    if(call_count % 2 == 0)
     {
         handle_serial_rx();
-    }
+    }else
 
 
     // 2. 统一处理所有端口的发送
     {
         handle_serial_tx();
     }
-
 }
 
 
@@ -253,8 +275,58 @@ static void run_medium_frequency_tasks(void) {
     // handle_led_blinking();
 }
 
+void channel_count_info(uint8_t channel_index)
+{
+    ChannelState* channel = &g_system_config.channels[channel_index];
+    LOG_FATAL("[%d]:rx_count= %d, tx_count= %d", channel_index, channel->rx_count, channel->tx_count);
+    LOG_FATAL("[%d]:rx_net  = %d, tx_net  = %d", channel_index, channel->rx_net,   channel->tx_net);
 
-static void run_low_frequency_tasks(void) 
+}
+
+void channel_count_info_all(void)
+{
+	int i;
+    for (i = 0; i < NUM_PORTS; i++)
+    {
+        channel_count_info(i);
+    }
+}
+
+void channel_buffer_cnt(uint8_t channel_index)
+{
+    ChannelState* channel = &g_system_config.channels[channel_index];
+    LOG_FATAL("[%d]:buffer_uart  = %d, buffer_net  = %d", channel_index, ring_buffer_num(&channel->buffer_uart), ring_buffer_num(&channel->buffer_net));
+}
+
+void channel_buffer_cnt_all(void)
+{
+    int i;
+    for (i = 0; i < NUM_PORTS; i++)
+    {
+        channel_buffer_cnt(i);
+    }
+}
+
+void channel_count_clr(uint8_t channel_index)
+{
+    ChannelState* channel = &g_system_config.channels[channel_index];
+    channel->tx_net = 0;
+    channel->rx_net = 0;
+    channel->rx_count = 0;
+    channel->tx_count = 0;
+}
+
+
+void channel_count_clr_all(void)
+{
+   	int i;
+    for (i = 0; i < NUM_PORTS; i++)
+    {
+        channel_count_clr(i);
+    } 
+}
+
+void run_low_frequency_tasks(void) 
 {
     int i;
     // for (i = 0; i < NUM_PORTS; i++) {
@@ -268,9 +340,7 @@ static void run_low_frequency_tasks(void)
     //         LOG_FATAL("[%d]:rx_net  = %d, tx_net  = %d", i, channel->rx_net,   channel->tx_net);
     //     }
     // }
-    ChannelState* channel = &g_system_config.channels[0];
-    LOG_FATAL("[%d]:rx_count= %d, tx_count= %d", 0, channel->rx_count, channel->tx_count);
-    LOG_FATAL("[%d]:rx_net  = %d, tx_net  = %d", 0, channel->rx_net,   channel->tx_net);
+    channel_count_info(0);
 }
 
 

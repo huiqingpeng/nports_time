@@ -187,12 +187,12 @@ int axi16550FIFOInit(int port)
 {
     // Enable FIFO, clear both RX and TX FIFOs  
     /*
-    DMA Mode 1
+    DMA Mode 0
     Resets XMIT FIFO.
     Resets RCVR FIFO.
     Enables FIFOs.
     */
-    userAxiCfgWrite(port, AXI_16550_FCR, 0x0F);
+    userAxiCfgWrite(port, AXI_16550_FCR, 0x07);
     return 0;
 }
 

@@ -83,3 +83,9 @@ uint8_t ring_buffer_peek(ring_buffer_t *buffer, char *data, ring_buffer_size_t i
     *data = buffer->buffer[data_index];
     return 1;
 }
+
+
+ring_buffer_size_t ring_buffer_num(ring_buffer_t *buffer)
+{
+    return ring_buffer_num_items(buffer);
+}
